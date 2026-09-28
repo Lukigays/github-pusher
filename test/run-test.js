@@ -487,6 +487,57 @@ async function main() {
       check('health: secretConfigured = true (secret diisi)', h.data?.secretConfigured === true);
       check('health: warnings kosong', (h.data?.warnings || []).length === 0, JSON.stringify(h.data?.warnings));
 
+
+
+    /* ---- 15. sanitas public/app.js (duplikasi & rekursi) ---- */
+    console.log('\n▶ [15] sanitas app.js');
+    const appJs = await fsp.readFile(path.join(ROOT, 'public/app.js'), 'utf8');
+    const idxHtml = await fsp.readFile(path.join(ROOT, 'public/index.html'), 'utf8');
+    check('showApp didefinisikan 1x (blok duplikat dihapus — bug <= v1.1.3)',
+      (appJs.match(/async function showApp\(/g) || []).length === 1);
+    check('doPush didefinisikan 1x', (appJs.match(/async function doPush\(/g) || []).length === 1);
+    const oneShotBody = appJs.slice(appJs.indexOf('async function doOneShotPush'));
+    check('doOneShotPush TIDAK memanggil dirinya sendiri (bug rekursi <= v1.1.3)',
+      !/return doOneShotPush\(/.test(oneShotBody.slice(0, oneShotBody.indexOf('\n/* ===='))));
+    check('updatePushReady menjelaskan kenapa tombol Push disabled (#pushHint)', appJs.includes("$('#pushHint')"));
+    check('index.html punya elemen #pushHint', idxHtml.includes('id="pushHint"'));
+
+    /* ---- 14. sesi demo + hubungkan PAT => push SUNGGUHAN (bukan dry-run) ---- */
+    console.log('\n▶ [14] demo -> PAT -> push sungguhan');
+    const pat = await startDemoInstance(3117, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();
+    const patCookieBak = cookie; cookie = '';
+    try {
+      const preq = (m, u, o) => req(m, u, { ...o, base: pat.url });
+      let d = await preq('GET', '/auth/github');
+      check('login demo', d.status === 302);
+
+      const zipBuf5 = await fsp.readFile(zipPath);
+      const mp11 = multipart({ stripRoot: '1' }, [{ field: 'zip', filename: 'proyek.zip', contentType: 'application/zip', content: zipBuf5 }]);
+      d = await preq('POST', '/api/files/zip', { body: mp11.body, headers: mp11.headers, raw: true });
+      check('upload ZIP di instance PAT', d.status === 200 && d.data?.totalFiles === 7, d.data?.error || '');
+
+      d = await preq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'main', message: 'x' } });
+      check('sebelum token: push = dry-run', d.data?.dryRun === true);
+
+      d = await preq('POST', '/api/link-token', { body: { token: 'ghp_mocktokenforlocaltestingonly' } });
+      check('link-token dari sesi demo -> ok', d.status === 200 && d.data?.ok === true, d.data?.error || '');
+
+      d = await preq('GET', '/api/me');
+      check('me: github.connected = true', d.data?.github?.connected === true);
+      check('me: via = pat', d.data?.github?.via === 'pat');
+
+      d = await preq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'main', message: 'Push sungguhan via PAT', destPath: 'hasil' } });
+      check('SESUDAH token: push SUNGGUHAN (dryRun=false)', d.data?.dryRun === false && d.data?.ok === true, d.data?.error || '');
+      check('7 file masuk commit', (d.data?.files || []).length === 7);
+      check('path diberi prefix hasil/', (d.data?.files || []).every((f) => f.path.startsWith('hasil/')));
+
+      d = await preq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'main', useMock: true, message: 'coba mock' } });
+      check('useMock diabaikan saat token asli ada', d.data?.mock !== true && d.data?.dryRun === false);
+    } finally {
+      pat.stop();
+      cookie = patCookieBak;
+    }
+
       d = await sreq('POST', '/api/logout');
       check('logout serverless', d.data?.ok === true);
       d = await sreq('GET', '/api/me');
@@ -495,6 +546,25 @@ async function main() {
       sl.stop();
       cookie = mainCookie2;
     }
+
+    /* ---- 13. sanitas vercel.json (regression guard) ---- */
+    console.log('\n▶ [13] vercel.json');
+    const vcfg = JSON.parse(await fsp.readFile(path.join(ROOT, 'vercel.json'), 'utf8'));
+    const fn = vcfg.functions && vcfg.functions['api/index.js'];
+    check('includeFiles bertipe string', typeof fn.includeFiles === 'string', typeof fn.includeFiles);
+    check('includeFiles memuat public/**', /public\/\*\*/.test(fn.includeFiles));
+    const rw = vcfg.rewrites || [];
+    check('ada rewrite ke api/index.js', rw.some((r) => /api\/index\.js/.test(r.destination)));
+    check('rewrite TIDAK mengecualikan /api (bug v1.1.0-1.1.1)',
+      rw.every((r) => !/\(\?!api/.test(r.source)),
+      rw.map((r) => r.source).join(' , '));
+    // simulasi: source harus cocok untuk / , /app.js, /api/config, /api/health, /auth/github
+    const src = rw[0].source;
+    const cocok = (u) => new RegExp('^' + src.replace(/\(\.\*\)/g, '.*') + '$').test(u);
+    check('source cocok untuk /', cocok('/'));
+    check('source cocok untuk /api/config', src === '/(.*)' ? true : cocok('/api/config'));
+    check('source cocok untuk /api/health', src === '/(.*)' ? true : cocok('/api/health'));
+    check('source cocok untuk /auth/github/callback', src === '/(.*)' ? true : cocok('/auth/github/callback'));
   } catch (e) {
     console.error('\n✖ ERROR saat pengujian:', e);
     results.push({ name: 'unexpected error', ok: false, extra: e.message });
