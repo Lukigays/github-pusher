@@ -1,0 +1,25 @@
+{
+  "name": "github-zip-pusher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Login GitHub/Google, upload folder atau ZIP, ekstrak, lalu push ke repository via GitHub REST API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/run-test.js",
+    "mock": "node test/mock-github.js 8080",
+    "cli": "node cli/push.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "multer": "^2.0.2",
+    "yauzl": "^3.4.0"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}
