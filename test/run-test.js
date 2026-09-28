@@ -448,6 +448,45 @@ async function main() {
       /* progres & logout */
       d = await sreq('GET', '/api/push/progress');
       check('/api/push/progress tersedia', d.status === 200);
+
+      /* ---- 12b. TANPA SESSION_SECRET: tidak boleh crash (bug lama: process.exit) ---- */
+      console.log('\n▶ [12b] serverless tanpa SESSION_SECRET');
+      const noSecret = await startDemoInstance(3116, { SERVERLESS: '1', SESSION_SECRET: '' }).ready();
+      const nCookieBak = cookie; cookie = '';
+      try {
+        const nreq = (m, u, o) => req(m, u, { ...o, base: noSecret.url });
+        let d = await nreq('GET', '/api/health');
+        check('fungsi TETAP hidup tanpa SESSION_SECRET', d.status === 200 && d.data?.ok === true, 'status=' + d.status);
+        check('health.secretConfigured = false', d.data?.secretConfigured === false);
+        check('health.mode = serverless', d.data?.mode === 'serverless');
+        check('health.publicDir = true', d.data?.publicDir === true);
+        check('peringatan SESSION_SECRET ada', (d.data?.warnings || []).some((w) => /SESSION_SECRET/.test(w)));
+
+        d = await nreq('GET', '/api/config');
+        check('config membawa warnings', (d.data?.warnings || []).length >= 1);
+
+        d = await nreq('GET', '/');
+        check('halaman utama tetap 200', d.status === 200);
+
+        // login masih berfungsi (sesi per-instance), push mock jalan
+        d = await nreq('GET', '/auth/github');
+        check('login demo tetap jalan', d.status === 302);
+        const zipBuf4 = await fsp.readFile(zipPath);
+        const mp10 = multipart(
+          { repo: 'demo-user/website-portofolio', branch: 'main', useMock: 'true', message: 'uji tanpa secret' },
+          [{ field: 'zip', filename: 'p.zip', contentType: 'application/zip', content: zipBuf4 }]);
+        d = await nreq('POST', '/api/push-upload', { body: mp10.body, headers: mp10.headers, raw: true });
+        check('push-upload tetap sukses tanpa secret', d.status === 200 && d.data?.ok === true, d.data?.error || '');
+      } finally {
+        noSecret.stop();
+        cookie = nCookieBak;
+      }
+
+      /* ---- 12c. health endpoint di mode biasa ---- */
+      const h = await req('GET', '/api/health', { base: sl.url });
+      check('health: secretConfigured = true (secret diisi)', h.data?.secretConfigured === true);
+      check('health: warnings kosong', (h.data?.warnings || []).length === 0, JSON.stringify(h.data?.warnings));
+
       d = await sreq('POST', '/api/logout');
       check('logout serverless', d.data?.ok === true);
       d = await sreq('GET', '/api/me');
