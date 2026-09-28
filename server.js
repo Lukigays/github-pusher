@@ -57,10 +57,15 @@ const FILES_LIMIT = SERVERLESS
   ? Math.min(Number(process.env.MAX_FILES || 300), 300)   // semua file ditampung di RAM fungsi
   : Number(process.env.MAX_FILES || 20000);
 
-if (SERVERLESS && !process.env.SESSION_SECRET) {
-  // rahasia acak per-instance = cookie sesi tidak pernah terbaca lagi di request berikutnya
-  console.error('[FATAL] SESSION_SECRET wajib diisi di environment Vercel (Dashboard → Settings → Environment Variables).');
-  if (IS_VERCEL) process.exit(1);
+/* SESSION_SECRET hilang di serverless = cookie sesi tidak terbaca antar-instance.
+   Dulu ini process.exit(1) -> fungsi Vercel MATI -> 500 FUNCTION_INVOCATION_FAILED.
+   Sekarang: pakai rahasia sementara agar halaman TETAP hidup, sambil memberi
+   peringatan jelas di /api/config, /api/health, dan banner UI. */
+const SECRET_MISSING = SERVERLESS && !process.env.SESSION_SECRET;
+const SESSION_SECRET_VALUE = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (SECRET_MISSING) {
+  console.warn('[WARN] SESSION_SECRET belum di-set. Aplikasi tetap jalan, tetapi login bisa ' +
+               'ter-reset tiap cold start. Set di Dashboard Vercel -> Settings -> Environment Variables, lalu redeploy.');
 }
 // Izinkan "push ke GitHub tiruan" (in-memory) agar alur bisa dicoba tanpa token.
 // Set ALLOW_MOCK_PUSH=0 di .env bila tidak diinginkan.
@@ -76,11 +81,11 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 if (SERVERLESS) {
   // Tanpa penyimpanan antar-request: sesi disimpan di cookie bertanda tangan (HMAC).
-  app.use(cookieSession({ secret: process.env.SESSION_SECRET }));
+  app.use(cookieSession({ secret: SESSION_SECRET_VALUE }));
 } else {
   app.use(session({
     name: 'gzp.sid',
-    secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+    secret: SESSION_SECRET_VALUE,
     resave: false,
     saveUninitialized: false,
     rolling: true,
@@ -92,7 +97,32 @@ if (SERVERLESS) {
     },
   }));
 }
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '5m' }));
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const INDEX_EXISTS = (() => { try { return fs.existsSync(path.join(PUBLIC_DIR, 'index.html')); } catch (_) { return false; } })();
+const APP_WARNINGS = [];
+if (SECRET_MISSING) {
+  APP_WARNINGS.push('SESSION_SECRET belum di-set di environment Vercel. Aplikasi jalan dengan rahasia sementara — login bisa ter-reset tiap cold start. Set SESSION_SECRET (Dashboard → Settings → Environment Variables) lalu <b>redeploy</b>.');
+}
+if (!INDEX_EXISTS) {
+  APP_WARNINGS.push('Berkas <code>public/index.html</code> tidak ada di dalam bundle fungsi. Pastikan folder <code>public/</code> ter-commit ke git dan tidak masuk <code>.gitignore</code>, lalu redeploy.');
+}
+app.use(express.static(PUBLIC_DIR, { maxAge: '5m' }));
+
+/* Fallback bila bundle kehilangan folder public: tampilkan halaman diagnostik
+   alih-alih 404/500 kosong, supaya masalah terlihat jelas dari browser/HP. */
+app.get('/', (req, res, next) => {
+  if (INDEX_EXISTS) return next();
+  res.status(200).type('html').send(`<!doctype html><html lang="id"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/><title>ZIP Pusher — diagnostik</title>
+<style>body{background:#0d1117;color:#e6edf3;font:15px/1.6 system-ui,sans-serif;padding:40px 20px;max-width:720px;margin:auto}
+code,a{color:#79c0fd}h1{font-size:20px}.w{background:#2b2410;border:1px solid #5c4a17;border-radius:8px;padding:10px 14px;margin:10px 0;color:#f0d68a}</style></head>
+<body><h1>GitHub ZIP / Folder Pusher — mode diagnostik</h1>
+<p>Fungsi Vercel hidup, tetapi berkas UI (<code>public/index.html</code>) tidak ditemukan di dalam bundle.</p>
+${APP_WARNINGS.map((w) => `<div class="w">${w}</div>`).join('')}
+<p>Periksa: <a href="/api/health">/api/health</a> · <a href="/api/config">/api/config</a></p>
+<p style="color:#7d8590">Penyebab umum: folder <code>public/</code> tidak ikut ter-upload (cek <code>.gitignore</code> / <code>.vercelignore</code>) atau <code>includeFiles</code> di <code>vercel.json</code> berubah.</p>
+</body></html>`);
+});
 
 /* ------------------------------------------------------------------ */
 /* Helper                                                              */
@@ -217,6 +247,28 @@ const folderUpload = multer({
 /* ------------------------------------------------------------------ */
 /* ROUTE: konfigurasi publik & status login                            */
 /* ------------------------------------------------------------------ */
+/** Diagnostik cepat — bisa dibuka dari HP saat deploy bermasalah. */
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    app: 'github-zip-pusher',
+    version: '1.1.0',
+    mode: SERVERLESS ? 'serverless' : 'server',
+    vercel: IS_VERCEL,
+    region: process.env.VERCEL_REGION || null,
+    node: process.version,
+    uptimeSec: Math.round(process.uptime()),
+    secretConfigured: !SECRET_MISSING,
+    publicDir: INDEX_EXISTS,
+    demoMode: DEMO_MODE,
+    mockEnabled: MOCK_ENABLED,
+    uploadLimitMB: UPLOAD_MB,
+    filesLimit: FILES_LIMIT,
+    warnings: APP_WARNINGS,
+    time: new Date().toISOString(),
+  });
+});
+
 app.get('/api/config', (req, res) => {
   res.json({
     githubEnabled: !DEMO_MODE,
@@ -229,6 +281,7 @@ app.get('/api/config', (req, res) => {
     serverless: SERVERLESS,
     oneshot: SERVERLESS,       // UI: upload + push dalam satu request
     vercel: IS_VERCEL,
+    warnings: APP_WARNINGS,
     maxApiFileMB: MAX_API_FILE_BYTES / 1048576,
     githubScope: GH_SCOPE,
     githubApiUrl: API,

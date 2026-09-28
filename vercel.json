@@ -5,22 +5,39 @@
     "api/index.js": {
       "maxDuration": 300,
       "memory": 1024,
-      "includeFiles": "{public,lib}/**"
+      "includeFiles": [
+        "public/**",
+        "lib/**"
+      ]
     }
   },
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/api/index.js" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/api/index.js"
+    }
   ],
   "headers": [
     {
       "source": "/app.js",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     },
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
       ]
     }
   ]

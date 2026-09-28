@@ -4,6 +4,26 @@ Panduan lengkap men-deploy aplikasi ini ke Vercel, **beserta batas nyata platfor
 
 ---
 
+## 🚨 Halaman error `500 FUNCTION_INVOCATION_FAILED`? Baca ini dulu
+
+Sejak **v1.1.0** aplikasi ini **tidak bisa lagi crash saat start** di Vercel. Langkah diagnosa 60 detik:
+
+1. Buka **`https://NAMA-PROYEK.vercel.app/api/health`** dari browser/HP.
+   - Bila muncul JSON (`"ok":true, "mode":"serverless", ...`) → fungsi hidup; lihat field `warnings`.
+   - Bila muncul JSON berisi `stack` → module gagal dimuat (dependensi/file tidak ter-bundle); lihat `message`.
+   - Bila tetap halaman error Vercel → buka **Dashboard → Deployments → (deploy terakhir) → Runtime Logs** (tombol *View Logs* di halaman error juga membuka ini).
+2. Penyebab paling umum & solusinya:
+
+| Gejala di `/api/health` / logs | Penyebab | Solusi |
+|---|---|---|
+| `secretConfigured: false` + warning SESSION_SECRET | `SESSION_SECRET` belum diisi. **Sebelum v1.1.0 ini membuat fungsi `process.exit(1)` → persis error 500 di halaman.** Sekarang aplikasi tetap hidup; login bisa ter-reset tiap cold start. | Dashboard → Settings → Environment Variables → tambah `SESSION_SECRET` (nilai acak, lihat bagian 3) → **Redeploy** (env baru berlaku setelah redeploy!) |
+| `publicDir: false` | Folder `public/` tidak ikut ter-bundle | Pastikan `public/` ter-commit ke git & tidak ada di `.gitignore`; `includeFiles` di `vercel.json` berisi `["public/**","lib/**"]` → redeploy |
+| JSON `stack: Cannot find module '...'` | Dependensi tidak terpasang / `package.json` tidak ter-commit | Commit `package.json` + `package-lock.json`; redeploy |
+| Tidak ada log sama sekali | Config `vercel.json` tidak valid | Jalankan `vercel deploy` dari CLI agar error config terlihat |
+
+3. Setelah menambah/mengubah Environment Variables **wajib redeploy** (tombol *Redeploy* di dashboard, atau `vercel --prod`). Env tidak berlaku surut ke deployment lama.
+
+---
 ## 0. Baca ini dulu: batas Vercel yang tidak bisa diubah
 
 | Batas | Nilai | Dampak ke aplikasi ini |
@@ -13,6 +33,7 @@ Panduan lengkap men-deploy aplikasi ini ke Vercel, **beserta batas nyata platfor
 | **Memori fungsi** | 1 GB (Hobby) / s.d. 4 GB (Pro) | Isi file ditampung di RAM → jumlah file dibatasi `MAX_FILES=300`. |
 | **Durasi fungsi** | 60 s (Hobby default) / maks 300 s | Push ribuan file bisa kena timeout. `maxDuration: 300` sudah diset di `vercel.json`. |
 | **State antar-request** | Tidak ada | Sesi disimpan di **cookie bertanda tangan HMAC** (`lib/cookiesession.js`), bukan `express-session`. |
+| **Env wajib** | — | Sejak v1.1.0 tidak ada env yang *wajib-krash*: tanpa `SESSION_SECRET` aplikasi tetap hidup dengan peringatan (dulu `process.exit(1)` → 500). |
 
 ### Kalau file Anda lebih besar dari 4,5 MB (pilihan jujur)
 
@@ -170,6 +191,7 @@ curl -s -X POST localhost:3000/api/files/zip
 | `501` pada `/api/files/*` atau `/api/push` | Memang disengaja di serverless (butuh disk). UI otomatis memakai `/api/push-upload`. |
 | Push sukses tapi branch "hilang" di demo | Anda memakai **GitHub tiruan** (`ALLOW_MOCK_PUSH=1`) yang datanya di RAM per-instance. Isi kredensial GitHub asli untuk push nyata. |
 | Rate limit GitHub (403) | 1 file = 1 request blob. Kurangi file per push atau tunggu reset (limit 5.000/jam). |
+| `500 FUNCTION_INVOCATION_FAILED` | Lihat bagian **🚨** di atas. Sejak v1.1.0 fungsi tidak pernah `process.exit`; buka `/api/health` untuk diagnosa. |
 
 ---
 
