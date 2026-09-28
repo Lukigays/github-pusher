@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GitHub ZIP / Folder Pusher</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#161b22; --bg3:#1c2330; --line:#2d333b; --line2:#3d444d;
+    --fg:#e6edf3; --fg2:#9da7b3; --fg3:#7d8590;
+    --acc:#2f81f7; --acc2:#1f6feb; --ok:#3fb950; --warn:#d29922; --err:#f85149;
+    --radius:10px; --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;}
+  a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 18px 80px}
+  header.top{display:flex;align-items:center;gap:14px;padding:14px 0 18px;border-bottom:1px solid var(--line);margin-bottom:22px;flex-wrap:wrap}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
+  .logo svg{width:28px;height:28px;fill:var(--fg)}
+  .spacer{flex:1}
+  .who{display:flex;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--line);padding:6px 12px;border-radius:999px}
+  .who img{width:26px;height:26px;border-radius:50%;background:var(--bg3)}
+  .who .nm{font-size:13.5px;font-weight:600}
+  .who .via{font-size:11px;color:var(--fg3)}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:18px;overflow:hidden}
+  .card>h2{margin:0;padding:14px 18px;font-size:14px;letter-spacing:.02em;border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:10px;background:var(--bg3)}
+  .card>h2 .step{display:inline-flex;width:22px;height:22px;border-radius:50%;background:var(--acc2);color:#fff;
+    align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .card>h2 .tag{margin-left:auto;font-size:11px;font-weight:500;color:var(--fg3)}
+  .body{padding:18px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);color:var(--fg);
+    padding:9px 15px;font-weight:600;transition:.15s;display:inline-flex;align-items:center;gap:8px}
+  button:hover:not(:disabled){border-color:var(--acc);background:#21304a}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--acc2);border-color:var(--acc2);color:#fff}
+  button.primary:hover:not(:disabled){background:#388bfd;border-color:#388bfd}
+  button.ghost{background:transparent}
+  button.danger{border-color:#5c2b2b;color:#ffb3ae} button.danger:hover{background:#3a1d1d;border-color:var(--err)}
+  button svg{width:16px;height:16px;fill:currentColor}
+  input,select,textarea{font:inherit;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+    border-radius:8px;padding:9px 11px;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(47,129,247,.18)}
+  label.fld{display:block;margin-bottom:14px}
+  label.fld>span{display:block;font-size:12.5px;color:var(--fg2);margin-bottom:6px;font-weight:600}
+  .hint{font-size:12px;color:var(--fg3);margin-top:6px}
+  .drop{border:2px dashed var(--line2);border-radius:var(--radius);padding:30px 18px;text-align:center;background:var(--bg);
+    transition:.15s;cursor:pointer}
+  .drop:hover,.drop.over{border-color:var(--acc);background:#122036}
+  .drop svg{width:38px;height:38px;fill:var(--fg3);margin-bottom:8px}
+  .drop b{display:block;font-size:15px}
+  .drop small{color:var(--fg3)}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tabs button{flex:1;justify-content:center}
+  .tabs button.on{background:var(--acc2);border-color:var(--acc2);color:#fff}
+  .bar{height:8px;background:var(--bg);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--ok));transition:width .25s}
+  ul.tree{list-style:none;margin:10px 0 0;padding:0;max-height:260px;overflow:auto;border:1px solid var(--line);
+    border-radius:8px;background:var(--bg);font-family:var(--mono);font-size:12.5px}
+  ul.tree li{padding:4px 10px;border-bottom:1px solid #21262d;display:flex;gap:8px}
+  ul.tree li:last-child{border-bottom:0}
+  ul.tree li span.sz{margin-left:auto;color:var(--fg3);white-space:nowrap}
+  ul.tree li.dir{color:var(--acc)}
+  .stats{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0 4px;font-size:13px;color:var(--fg2)}
+  .stats b{color:var(--fg);font-size:15px;display:block}
+  .note{border-radius:8px;padding:11px 13px;font-size:13.5px;margin-bottom:14px;border:1px solid;display:flex;gap:10px;align-items:flex-start}
+  .note.info{background:#0f2237;border-color:#1f4d7a;color:#a9d1ff}
+  .note.warn{background:#2b2410;border-color:#5c4a17;color:#f0d68a}
+  .note.err{background:#2d1416;border-color:#6e2b2b;color:#ffb3ae}
+  .note.ok{background:#12261a;border-color:#1f5c31;color:#8ce0a1}
+  .note svg{width:17px;height:17px;fill:currentColor;flex:none;margin-top:2px}
+  pre.log{background:#0a0d12;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:var(--mono);
+    font-size:12.5px;max-height:280px;overflow:auto;margin:12px 0 0;white-space:pre-wrap;color:var(--fg2)}
+  pre.log .ok{color:var(--ok)} pre.log .err{color:var(--err)} pre.log .warn{color:var(--warn)} pre.log .dim{color:var(--fg3)}
+  .chk{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;margin-bottom:10px;color:var(--fg2)}
+  .chk input{width:auto;margin-top:3px}
+  .login-box{max-width:440px;margin:40px auto;text-align:center}
+  .login-box h1{font-size:23px;margin:0 0 6px}
+  .login-box p.sub{color:var(--fg2);margin:0 0 26px;font-size:14px}
+  .btn-row{display:flex;flex-direction:column;gap:11px}
+  .btn-row button,.btn-row a.btnlink{justify-content:center;padding:12px;font-size:14.5px}
+  a.btnlink{display:flex;align-items:center;gap:9px;border-radius:8px;border:1px solid var(--line2);background:var(--bg3);
+    color:var(--fg);padding:12px;font-weight:600;text-decoration:none}
+  a.btnlink:hover{text-decoration:none;border-color:var(--acc)}
+  a.btnlink.gh{background:#24292f;border-color:#3d444d}
+  .divider{display:flex;align-items:center;gap:12px;color:var(--fg3);font-size:12px;margin:20px 0}
+  .divider:before,.divider:after{content:"";flex:1;height:1px;background:var(--line)}
+  .steps{color:var(--fg2);font-size:13.5px;text-align:left;background:var(--bg);border:1px solid var(--line);
+    border-radius:8px;padding:12px 14px;margin-top:20px}
+  .steps code{font-family:var(--mono);background:#21262d;padding:1px 5px;border-radius:4px;font-size:12px;color:#ffb86b}
+  .pill{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line2);color:var(--fg2);background:var(--bg)}
+  .pill.priv{color:#f0d68a;border-color:#5c4a17}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1;min-width:180px}
+  details.adv{margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:0;background:var(--bg)}
+  details.adv>summary{cursor:pointer;padding:10px 13px;font-size:13px;color:var(--fg2);font-weight:600}
+  details.adv>div{padding:0 13px 13px}
+  .res-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  kbd{font-family:var(--mono);background:#21262d;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:11.5px}
+  .hidden{display:none !important}
+  footer{text-align:center;color:var(--fg3);font-size:12px;margin-top:30px}
+  .spin{width:14px;height:14px;border:2px solid var(--line2);border-top-color:var(--acc);border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      GitHub ZIP / Folder Pusher
+    </div>
+    <div class="spacer"></div>
+    <div id="whoBox" class="hidden"></div>
+  </header>
+
+  <div id="notices"></div>
+
+  <!-- ============ LOGIN ============ -->
+  <section id="loginView" class="hidden">
+    <div class="login-box">
+      <h1>Masuk untuk mulai push</h1>
+      <p class="sub">Upload folder atau ZIP, ekstrak otomatis di server, lalu commit ke repository GitHub Anda — tanpa perlu <code>git</code>.</p>
+      <div class="btn-row">
+        <a class="btnlink gh" id="btnGithub" href="/auth/github" target="_self">
+          <svg viewBox="0 0 16 16" style="width:18px;height:18px;fill:currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          Lanjut dengan GitHub
+        </a>
+        <div id="googleBtn"></div>
+      </div>
+      <div class="divider">atau</div>
+      <div class="btn-row">
+        <button class="ghost" id="btnPatLogin">Masuk dengan Personal Access Token</button>
+      </div>
+      <div id="patBox" class="hidden" style="margin-top:14px;text-align:left">
+        <label class="fld"><span>GitHub Personal Access Token (scope <code>repo</code>)</span>
+          <input id="patInput" type="password" placeholder="ghp_xxxxxxxxxxxx / github_pat_xxxx" autocomplete="off" />
+        </label>
+        <div class="row">
+          <button class="primary" id="patSave">Hubungkan token</button>
+          <a href="https://github.com/settings/tokens/new?scopes=repo&description=zip-pusher" target="_blank" rel="noopener">Buat token baru ↗</a>
+        </div>
+        <p class="hint">Token disimpan hanya di sesi server Anda (memory) dan dihapus saat logout.</p>
+      </div>
+      <div class="steps" id="setupHelp"></div>
+    </div>
+  </section>
+
+  <!-- ============ APP ============ -->
+  <main id="appView" class="hidden">
+
+    <div id="demoBanner"></div>
+
+    <!-- STEP 1 : FILE -->
+    <section class="card">
+      <h2><span class="step">1</span> Pilih file <span class="tag" id="fileTag">belum ada file</span></h2>
+      <div class="body">
+        <div class="tabs">
+          <button id="tabZip" class="on" type="button">📦 File ZIP</button>
+          <button id="tabFolder" type="button">📁 Folder</button>
+        </div>
+
+        <div id="paneZip">
+          <div class="drop" id="dropZip">
+            <svg viewBox="0 0 24 24"><path d="M12 3v10.6l3.3-3.3 1.4 1.4L11 17.4 5.3 11.7l1.4-1.4L10 13.6V3h2zM4 19h16v2H4v-2z"/></svg>
+            <b>Tarik &amp; lepas file .zip di sini</b>
+            <small>atau klik untuk memilih — maks <span id="maxMb">512</span> MB</small>
+          </div>
+          <input type="file" id="zipInput" accept=".zip,application/zip" class="hidden" />
+          <label class="chk" style="margin-top:12px">
+            <input type="checkbox" id="stripRoot" checked />
+            <span>Buang folder pembungkus bila ZIP berisi satu folder induk (mis. <code>repo-main/…</code>)</span>
+          </label>
+          <label class="fld" style="margin-top:4px"><span>Encoding nama file ZIP (bila nama file tampak rusak)</span>
+            <select id="codepage">
+              <option value="">Otomatis (UTF-8 → cp850)</option>
+              <option value="windows-1252">Windows-1252 (Latin-1, umum di Windows)</option>
+              <option value="cp850">cp850 (DOS Latin-1)</option>
+              <option value="shift_jis">Shift_JIS (Jepang)</option>
+              <option value="cp1251">Windows-1251 (Sirilik)</option>
+              <option value="windows-874">Windows-874 (Thailand)</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="paneFolder" class="hidden">
+          <div class="drop" id="dropFolder">
+            <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+            <b>Tarik &amp; lepas folder di sini</b>
+            <small>atau klik untuk memilih folder dari komputer</small>
+          </div>
+          <input type="file" id="folderInput" webkitdirectory directory multiple class="hidden" />
+          <p class="hint">Folder <code>node_modules</code>, <code>.git</code>, <code>dist</code>, <code>build</code>, dll. otomatis dilewati.</p>
+        </div>
+
+        <div id="uploadProgress" class="hidden" style="margin-top:14px">
+          <div class="row" style="margin-bottom:6px"><span class="spin"></span><span id="upText" style="font-size:13px;color:var(--fg2)">Mengupload…</span></div>
+          <div class="bar"><i id="upBar"></i></div>
+        </div>
+
+        <div id="fileSummary" class="hidden">
+          <div class="stats" id="statsBox"></div>
+          <div class="row" style="margin-top:10px">
+            <button class="ghost" id="btnClearFiles">✕ Hapus &amp; pilih ulang</button>
+            <span class="hint" id="rootInfo"></span>
+          </div>
+          <ul class="tree" id="fileTree"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2 : TUJUAN -->
+    <section class="card">
+      <h2><span class="step">2</span> Tujuan push <span class="tag" id="repoTag">pilih repository</span></h2>
+      <div class="body">
+        <div class="grid2">
+          <label class="fld"><span>Repository</span>
+            <input id="repoSearch" placeholder="Cari repo… (ketik untuk filter)" autocomplete="off" />
+            <select id="repoSelect" size="7" style="margin-top:8px;height:auto"></select>
+            <span class="hint" id="repoMeta"></span>
+          </label>
+          <div>
+            <label class="fld"><span>Branch tujuan</span>
+              <select id="branchSelect"></select>
+            </label>
+            <label class="fld"><span>…atau buat branch baru</span>
+              <div class="row">
+                <input id="newBranch" class="grow" placeholder="contoh: upload-2026-09" />
+                <button id="btnUseNewBranch" type="button">Pakai</button>
+              </div>
+              <span class="hint" id="branchMeta"></span>
+            </label>
+          </div>
+        </div>
+
+        <label class="fld"><span>Folder tujuan di dalam repo (kosongkan = root)</span>
+          <input id="destPath" placeholder="contoh: public/assets  (tanpa slash di awal)" />
+        </label>
+
+        <label class="fld"><span>Pesan commit</span>
+          <input id="commitMsg" placeholder="Upload folder via ZIP pusher" />
+        </label>
+
+        <details class="adv">
+          <summary>Opsi lanjutan</summary>
+          <div>
+            <label class="chk"><input type="checkbox" id="optOverwrite" checked /><span>Timpa file yang sudah ada di folder tujuan</span></label>
+            <label class="chk"><input type="checkbox" id="optDelete" /><span>Hapus file lama di folder tujuan yang tidak ada di upload (ganti seluruh isi folder)</span></label>
+            <label class="chk"><input type="checkbox" id="optDry" /><span>Dry-run: hanya tampilkan rencana commit, tidak benar-benar push</span></label>
+            <label class="chk hidden" id="optMockRow"><input type="checkbox" id="optMock" /><span>Coba push ke <b>GitHub tiruan</b> (in-memory, tanpa token &amp; tanpa repo asli)</span></label>
+            <label class="fld" style="margin-top:10px"><span>Branch basis (untuk branch baru, default = branch utama repo)</span>
+              <input id="optBaseBranch" placeholder="main" />
+            </label>
+          </div>
+        </details>
+
+        <div class="row" style="margin-top:14px">
+          <button class="ghost" id="btnNewRepo">＋ Buat repo baru</button>
+          <div class="spacer"></div>
+          <button class="ghost" id="btnPreview">Lihat rencana commit</button>
+          <button class="primary" id="btnPush" disabled>
+            <svg viewBox="0 0 16 16"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75C0 1.784.784 1 1.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM8 3.5a.75.75 0 0 1 .75.75v3.19l1.22-1.22a.75.75 0 1 1 1.06 1.06l-2.5 2.5a.75.75 0 0 1-1.06 0l-2.5-2.5a.75.75 0 0 1 1.06-1.06l1.22 1.22V4.25A.75.75 0 0 1 8 3.5Z"/></svg>
+            Push ke GitHub
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 3 : HASIL -->
+    <section class="card hidden" id="resultCard">
+      <h2><span class="step">3</span> Hasil <span class="tag" id="resultTag"></span></h2>
+      <div class="body">
+        <div id="resultNote"></div>
+        <div id="pushProgress" class="hidden">
+          <div class="bar"><i id="pushBar"></i></div>
+          <p class="hint" id="pushStage" style="margin-top:8px"></p>
+        </div>
+        <div class="res-links" id="resultLinks"></div>
+        <pre class="log" id="log"></pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- dialog repo baru -->
+  <div id="modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50">
+    <div class="card" style="max-width:430px;width:100%;margin:0">
+      <h2>Buat repository baru</h2>
+      <div class="body">
+        <label class="fld"><span>Nama repo</span><input id="nrName" placeholder="nama-repo" /></label>
+        <label class="fld"><span>Deskripsi (opsional)</span><input id="nrDesc" /></label>
+        <label class="chk"><input type="checkbox" id="nrPrivate" /><span>Repo privat</span></label>
+        <label class="chk"><input type="checkbox" id="nrInit" checked /><span>Inisialisasi dengan README</span></label>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="nrCreate">Buat</button>
+          <button class="ghost" id="nrCancel">Batal</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Dibuat dengan Node.js + Express · Push via GitHub REST API (tanpa git CLI)</footer>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
