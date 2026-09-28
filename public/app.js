@@ -84,8 +84,14 @@ function uploadXhr(url, formData, onProgress) {
  * INIT
  * ================================================================== */
 async function init() {
-  try { state.config = await api('/api/config'); } catch (e) { console.warn(e); }
-  $('#maxMb').textContent = state.config.maxUploadMB;
+  try { state.config = await api('/api/config'); } catch (e) {
+    console.warn(e);
+    note('err', 'Tidak bisa menghubungi server (<code>/api/config</code>). Bila ini deploy Vercel, buka <code>/api/health</code> untuk melihat penyebabnya.');
+  }
+  $('#maxMb').textContent = state.config.maxUploadMB || 512;
+
+  // peringatan dari server (mis. SESSION_SECRET belum diisi di Vercel)
+  (state.config.warnings || []).forEach((w) => note('warn', w, '#notices'));
   handleNotice();
   try { state.me = await api('/api/me'); } catch (e) { state.me = { loggedIn: false }; }
 
