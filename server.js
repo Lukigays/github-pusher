@@ -174,8 +174,14 @@ function getGitHub(req) {
   return { gh: token ? new GitHub(token) : null, token, source: s.githubToken ? 'oauth' : s.pat ? 'pat' : process.env.GITHUB_TOKEN ? 'env' : null };
 }
 
+/**
+ * Sesi dianggap "demo" hanya selama BELUM ada token GitHub asli yang terhubung.
+ * Begitu user menghubungkan PAT / login OAuth, push berjalan SUNGGUHAN
+ * meskipun instance ini tidak mengonfigurasi OAuth App (mode demo).
+ */
 function isDemoSession(req) {
-  return DEMO_MODE && req.session.user && req.session.user.provider === 'demo';
+  if (!(DEMO_MODE && req.session.user && req.session.user.provider === 'demo')) return false;
+  return !getGitHub(req).token;
 }
 
 function asyncH(fn) {
@@ -252,7 +258,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'github-zip-pusher',
-    version: '1.1.0',
+    version: '1.1.4',
     mode: SERVERLESS ? 'serverless' : 'server',
     vercel: IS_VERCEL,
     region: process.env.VERCEL_REGION || null,
