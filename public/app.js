@@ -166,6 +166,14 @@ function showLogin() {
   }
 
   $('#btnPatLogin').onclick = () => $('#patBox').classList.toggle('hidden');
+  if (!state.config.githubEnabled) {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.style.cssText = 'margin-top:10px;color:var(--fg2)';
+    hint.innerHTML = '💡 Ingin push <b>sungguhan</b> tanpa menyiapkan OAuth App / env Vercel? Pakai tombol ' +
+      '<b>Masuk dengan Personal Access Token</b> di bawah: buat token di GitHub (scope <code>repo</code>), tempel, selesai.';
+    $('#btnPatLogin').parentNode.insertBefore(hint, $('#btnPatLogin').nextSibling);
+  }
   $('#patSave').onclick = async () => {
     const token = $('#patInput').value.trim();
     if (!token) return alert('Isi token terlebih dahulu.');
@@ -368,6 +376,10 @@ function previewFolderLocal(fileList) {
   const zip = files.find((f) => /\.zip$/i.test(f.name));
   if (zip && files.length === 1) return previewZipLocal(zip);
 
+  const totalSz = files.reduce((a, f) => a + f.size, 0);
+  if (state.config.oneshot && totalSz > state.config.maxUploadMB * 1048576) {
+    note('warn', `Total isi folder ${fmtSize(totalSz)} melebihi batas <b>${state.config.maxUploadMB} MB</b> mode sekali jalan (Vercel). Push akan ditolak server — kurangi isi folder, atau jalankan di server sendiri/CLI.`, '#demoBanner');
+  }
   const rel = files.map((f) => f.webkitRelativePath || f.relativePath || f.name);
   const kept = filteredPaths(rel);
   const root = commonRoot(kept);
@@ -418,8 +430,6 @@ async function doOneShotPush(payload) {
     fd.append(k, typeof v === 'boolean' ? String(v) : String(v));
   }
 
-  if (state.config.oneshot) return doOneShotPush(payload);
-
   $('#resultCard').classList.remove('hidden');
   $('#log').innerHTML = ''; $('#resultNote').innerHTML = ''; $('#resultLinks').innerHTML = '';
   $('#resultTag').textContent = 'memproses…';
@@ -458,22 +468,30 @@ async function showApp() {
   $('#appView').classList.remove('hidden');
   renderWho();
 
-  if (state.config.mockEnabled && $('#optMockRow')) $('#optMockRow').classList.remove('hidden');
+  const ghConnected = !!(state.me.github && state.me.github.connected);
+  if (state.config.mockEnabled && !ghConnected && $('#optMockRow')) $('#optMockRow').classList.remove('hidden');
   if (state.config.oneshot) {
     note('info', `<b>Mode serverless (Vercel).</b> Upload &amp; push digabung jadi satu request karena <code>/tmp</code> tidak persisten.
       Batas Vercel: <b>4,5 MB</b> per request (tidak bisa dinaikkan) — untuk proyek lebih besar pakai <code>cli/push.js</code> dari komputer Anda atau deploy ke VPS/Railway/Render.`, '#demoBanner');
     const t = $('#fileTag'); if (t) t.textContent = 'pratinjau lokal';
   }
-  if (state.config.demoMode || state.me.provider === 'demo') {
-    $('#demoBanner').innerHTML = '';
-    note('warn', `<b>Mode demo aktif.</b> Push hanya menghasilkan <i>dry-run</i> (rencana commit), tidak benar-benar menulis ke GitHub.
-      Isi <code>GITHUB_CLIENT_ID</code> + <code>GITHUB_CLIENT_SECRET</code> di <code>.env</code> untuk mengaktifkan push sungguhan.`, '#demoBanner');
-  }
-  if (state.me.provider === 'google' && !state.me.github.connected) {
-    note('warn', `Anda login lewat <b>Google</b>. Google tidak memberi akses ke GitHub —
-      <a href="#" id="linkPatNow">hubungkan Personal Access Token</a> (scope <code>repo</code>) agar bisa push.`, '#demoBanner');
+  if (!ghConnected) {
+    /* Belum ada token GitHub -> push masih dry-run. Tawarkan 2 jalan keluar. */
+    const where = (state.config.vercel || state.config.serverless)
+      ? 'Dashboard Vercel → Settings → Environment Variables, lalu <b>Redeploy</b>'
+      : 'file <code>.env</code>, lalu restart server';
+    const extra = state.me.provider === 'google'
+      ? ' (Catatan: login Google tidak memberi akses ke GitHub, jadi token tetap diperlukan.)'
+      : '';
+    note('warn', `<b>Mode demo aktif</b> — push hanya dry-run.${extra} Dua cara mengaktifkan push <b>sungguhan</b>:<br/>
+      1️⃣ <b>Paling cepat, tanpa setup server:</b> <a href="#" id="linkPatNow">hubungkan Personal Access Token</a>
+      (classic PAT scope <code>repo</code>, atau fine-grained dengan izin <i>Contents: Read and write</i>) — begitu terhubung, push langsung berjalan sungguhan.<br/>
+      2️⃣ <b>Login GitHub penuh (OAuth):</b> isi <code>GITHUB_CLIENT_ID</code> + <code>GITHUB_CLIENT_SECRET</code> di ${where}.`, '#demoBanner');
     const a = document.getElementById('linkPatNow');
     if (a) a.onclick = (e) => { e.preventDefault(); openPatDialog(); };
+  } else {
+    const viaLabel = { oauth: 'GitHub OAuth', pat: 'Personal Access Token', env: 'token server (.env)' }[state.me.github.via] || 'token';
+    note('ok', `Terhubung ke GitHub sebagai <b>${esc((state.me.profile || {}).login || '')}</b> via <b>${esc(viaLabel)}</b> — push berjalan <b>sungguhan</b> ke repository Anda.`, '#demoBanner');
   }
 
   await Promise.all([loadRepos(), loadExistingUpload()]);
@@ -503,7 +521,7 @@ function openPatDialog() {
   const token = prompt('Tempel GitHub Personal Access Token (scope repo):');
   if (!token) return;
   api('/api/link-token', { method: 'POST', body: { token: token.trim() } })
-    .then((r) => { note('ok', `Token terhubung sebagai <b>${esc(r.githubLogin)}</b>.`); setTimeout(() => location.reload(), 900); })
+    .then((r) => { note('ok', `Token terhubung sebagai <b>${esc(r.githubLogin)}</b> — push sekarang <b>sungguhan</b>.`); setTimeout(() => location.reload(), 900); })
     .catch((e) => note('err', esc(e.message)));
 }
 
@@ -612,7 +630,10 @@ async function handleZipFile(file) {
 
 async function handleFolderFiles(fileList) {
   const files = Array.from(fileList || []);
-  if (!files.length) return;
+  if (!files.length) {
+    note('warn', 'Tidak ada file yang terpilih. Banyak browser HP (iOS & sebagian Android) <b>tidak mendukung memilih folder</b> — gunakan tab <b>📦 ZIP</b>: buat ZIP dulu dari aplikasi Files (pilih file/folder → menu ⋮ atau Bagikan → <i>Kompres / Compress to ZIP</i>), lalu upload ZIP-nya di sini.');
+    return;
+  }
   if (state.config.oneshot) return previewFolderLocal(files);
   const zips = files.filter((f) => /\.zip$/i.test(f.name));
   if (zips.length === 1 && files.length === 1) return handleZipFile(zips[0]);
@@ -709,8 +730,17 @@ function updatePushReady() {
   const okFiles = !!(state.upload && state.upload.files && state.upload.files.length);
   const okRepo = !!$('#repoSelect').value;
   const okBranch = !!currentBranch();
-  $('#btnPush').disabled = !(okFiles && okRepo && okBranch);
+  const ready = okFiles && okRepo && okBranch;
+  $('#btnPush').disabled = !ready;
   $('#btnPreview').disabled = !okFiles;
+  const h = $('#pushHint');
+  if (h) {
+    h.textContent = ready ? '' :
+      !okFiles ? '⬆ Tombol Push aktif setelah ZIP/folder dipilih.' :
+      !okRepo ? '⬆ Pilih repository dulu. Daftar repo baru terisi setelah token GitHub terhubung — sesi demo tidak punya akses repo (hubungkan Personal Access Token).' :
+      '⬆ Tentukan branch tujuan.';
+    h.classList.toggle('hidden', ready);
+  }
 }
 
 function buildPayload(extra = {}) {
@@ -823,402 +853,6 @@ async function doPush() {
     updatePushReady();
   }
 }
-
-/* ==================================================================
- * APP VIEW
- * ================================================================== */
-async function showApp() {
-  $('#loginView').classList.add('hidden');
-  $('#appView').classList.remove('hidden');
-  renderWho();
-
-  if (state.config.mockEnabled && $('#optMockRow')) $('#optMockRow').classList.remove('hidden');
-  if (state.config.oneshot) {
-    note('info', `<b>Mode serverless (Vercel).</b> Upload &amp; push digabung jadi satu request karena <code>/tmp</code> tidak persisten.
-      Batas Vercel: <b>4,5 MB</b> per request (tidak bisa dinaikkan) — untuk proyek lebih besar pakai <code>cli/push.js</code> dari komputer Anda atau deploy ke VPS/Railway/Render.`, '#demoBanner');
-    const t = $('#fileTag'); if (t) t.textContent = 'pratinjau lokal';
-  }
-  if (state.config.demoMode || state.me.provider === 'demo') {
-    $('#demoBanner').innerHTML = '';
-    note('warn', `<b>Mode demo aktif.</b> Push hanya menghasilkan <i>dry-run</i> (rencana commit), tidak benar-benar menulis ke GitHub.
-      Isi <code>GITHUB_CLIENT_ID</code> + <code>GITHUB_CLIENT_SECRET</code> di <code>.env</code> untuk mengaktifkan push sungguhan.`, '#demoBanner');
-  }
-  if (state.me.provider === 'google' && !state.me.github.connected) {
-    note('warn', `Anda login lewat <b>Google</b>. Google tidak memberi akses ke GitHub —
-      <a href="#" id="linkPatNow">hubungkan Personal Access Token</a> (scope <code>repo</code>) agar bisa push.`, '#demoBanner');
-    const a = document.getElementById('linkPatNow');
-    if (a) a.onclick = (e) => { e.preventDefault(); openPatDialog(); };
-  }
-
-  await Promise.all([loadRepos(), loadExistingUpload()]);
-  bindApp();
-}
-
-function renderWho() {
-  const u = state.me.profile || {};
-  const via = { oauth: 'GitHub OAuth', pat: 'Personal Access Token', env: 'token dari .env', demo: null }[state.me.github?.via] || (state.me.provider === 'google' ? 'Google' : 'demo');
-  $('#whoBox').classList.remove('hidden');
-  $('#whoBox').innerHTML = `
-    <div class="who">
-      ${u.avatar ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer" />` : ''}
-      <div>
-        <div class="nm">${esc(u.name || u.login || 'user')}</div>
-        <div class="via">${esc(u.login || '')} · ${esc(via)}</div>
-      </div>
-    </div>
-    <button class="ghost" id="btnLogout" style="margin-left:8px">Logout</button>`;
-  $('#btnLogout').onclick = async () => {
-    await api('/api/logout', { method: 'POST' });
-    location.href = '/?notice=logged-out';
-  };
-}
-
-function openPatDialog() {
-  const token = prompt('Tempel GitHub Personal Access Token (scope repo):');
-  if (!token) return;
-  api('/api/link-token', { method: 'POST', body: { token: token.trim() } })
-    .then((r) => { note('ok', `Token terhubung sebagai <b>${esc(r.githubLogin)}</b>.`); setTimeout(() => location.reload(), 900); })
-    .catch((e) => note('err', esc(e.message)));
-}
-
-/* ---------------- repos ---------------- */
-async function loadRepos() {
-  try {
-    const r = await api('/api/repos?includeOrgs=0');
-    state.repos = r.repos || [];
-    renderRepos('');
-    if (r.notice) $('#repoMeta').textContent = r.notice;
-  } catch (e) {
-    $('#repoSelect').innerHTML = '';
-    note('err', 'Gagal memuat daftar repo: ' + esc(e.message) + (e.hint ? ' — ' + esc(e.hint) : ''), '#demoBanner');
-  }
-}
-
-function renderRepos(filter) {
-  const sel = $('#repoSelect');
-  const f = filter.trim().toLowerCase();
-  const list = state.repos.filter((r) => !f || r.full_name.toLowerCase().includes(f));
-  sel.innerHTML = list.map((r) =>
-    `<option value="${esc(r.full_name)}" data-default="${esc(r.default_branch || 'main')}" data-priv="${r.private ? 1 : 0}" data-perm="${esc(r.permission || '')}">
-      ${esc(r.full_name)}${r.private ? '  🔒' : ''}
-    </option>`).join('') || '<option disabled>— tidak ada repo yang cocok —</option>';
-  $('#repoTag').textContent = `${list.length} repo`;
-  if (!state.selectedRepo && list.length) sel.value = list[0].value;
-  updatePushReady();
-}
-
-async function onRepoChange() {
-  const sel = $('#repoSelect');
-  const full = sel.value;
-  if (!full || !full.includes('/')) return;
-  const opt = sel.options[sel.selectedIndex];
-  state.selectedRepo = {
-    full_name: full,
-    default_branch: opt?.dataset.default || 'main',
-    private: opt?.dataset.priv === '1',
-    permission: opt?.dataset.perm || '',
-  };
-  $('#repoMeta').innerHTML = `branch utama: <b>${esc(state.selectedRepo.default_branch)}</b> ·
-    ${state.selectedRepo.private ? '<span class="pill priv">privat</span>' : '<span class="pill">publik</span>'}
-    <span class="pill">izin: ${esc(state.selectedRepo.permission || '?')}</span>`;
-  $('#branchSelect').innerHTML = '<option disabled>memuat branch…</option>';
-  state.branches = [];
-  try {
-    const r = await api(`/api/branches/${encodeURIComponent(state.selectedRepo.owner || full.split('/')[0])}/${encodeURIComponent(full.split('/')[1])}`);
-    state.branches = r.branches || [];
-    $('#branchSelect').innerHTML = state.branches.map((b) =>
-      `<option value="${esc(b.name)}"${b.protected ? ' data-prot="1"' : ''}>${esc(b.name)}${b.protected ? '  🛡 (protected)' : ''}</option>`).join('')
-      || `<option value="${esc(r.default_branch || 'main')}">${esc(r.default_branch || 'main')} (baru)</option>`;
-    state.branch = $('#branchSelect').value;
-    const prot = $('#branchSelect').selectedOptions[0]?.dataset.prot === '1';
-    $('#branchMeta').innerHTML = prot
-      ? '⚠ Branch ini <b>protected</b> — push langsung bisa ditolak (422). Pertimbangkan branch baru.'
-      : `${state.branches.length} branch tersedia.`;
-  } catch (e) {
-    $('#branchSelect').innerHTML = `<option value="${esc(state.selectedRepo.default_branch)}">${esc(state.selectedRepo.default_branch)}</option>`;
-    state.branch = state.selectedRepo.default_branch;
-    $('#branchMeta').textContent = 'Gagal memuat branch: ' + e.message;
-  }
-  state.useNewBranch = false;
-  updatePushReady();
-}
-
-/* ---------------- upload ---------------- */
-function setTab(kind) {
-  $('#tabZip').classList.toggle('on', kind === 'zip');
-  $('#tabFolder').classList.toggle('on', kind === 'folder');
-  $('#paneZip').classList.toggle('hidden', kind !== 'zip');
-  $('#paneFolder').classList.toggle('hidden', kind !== 'folder');
-}
-
-function showUploadProgress(on) {
-  $('#uploadProgress').classList.toggle('hidden', !on);
-  if (!on) $('#upBar').style.width = '0%';
-}
-
-async function handleZipFile(file) {
-  if (!file) return;
-  if (state.config.oneshot) return previewZipLocal(file);
-  if (!/\.zip$/i.test(file.name)) return note('err', 'File harus berformat <code>.zip</code>. Untuk folder biasa, gunakan tab <b>📁 Folder</b>.');
-  if (file.size > state.config.maxUploadMB * 1048576) return note('err', `File ${(fmtSize(file.size))} melebihi batas ${state.config.maxUploadMB} MB.`);
-  const fd = new FormData();
-  fd.append('zip', file);
-  fd.append('stripRoot', $('#stripRoot').checked ? '1' : '0');
-  if ($('#codepage') && $('#codepage').value) fd.append('codepage', $('#codepage').value);
-  showUploadProgress(true);
-  $('#upText').textContent = `Mengupload ${file.name} (${fmtSize(file.size)})…`;
-  const stopPoll = startExtractPolling();
-  try {
-    const r = await uploadXhr('/api/files/zip', fd, (p) => {
-      $('#upBar').style.width = (p * 100).toFixed(1) + '%';
-      if (p >= 1) $('#upText').textContent = 'Mengekstrak ZIP di server…';
-    });
-    state.upload = r;
-    renderUpload();
-    log(`ZIP <b>${esc(file.name)}</b> diekstrak: ${r.totalFiles} file, ${fmtSize(r.totalSize)}${r.skipped ? ` · ${r.skipped} entri dilewati` : ''}`, 'ok');
-  } catch (e) {
-    note('err', 'Upload ZIP gagal: ' + esc(e.message) + (e.hint ? ' — ' + esc(e.hint) : ''));
-  } finally {
-    stopPoll();
-    showUploadProgress(false);
-  }
-}
-
-async function handleFolderFiles(fileList) {
-  const files = Array.from(fileList || []);
-  if (!files.length) return;
-  if (state.config.oneshot) return previewFolderLocal(files);
-  const zips = files.filter((f) => /\.zip$/i.test(f.name));
-  if (zips.length === 1 && files.length === 1) return handleZipFile(zips[0]);
-  if (files.length > state.config.maxFiles) return note('err', `Jumlah file (${files.length}) melebihi batas ${state.config.maxFiles}.`);
-  const fd = new FormData();
-  let total = 0;
-  const relPaths = [];
-  for (const f of files) {
-    const rel = f.webkitRelativePath || f.relativePath || f.name;
-    fd.append('files', f, rel);
-    relPaths.push(rel);
-    total += f.size;
-  }
-  // cadangan bila originalname kehilangan struktur folder (browser lama)
-  if (relPaths.every((p) => p && p.length)) fd.append('relPaths', JSON.stringify(relPaths));
-
-  showUploadProgress(true);
-  $('#upText').textContent = `Mengupload ${files.length} file (${fmtSize(total)})…`;
-  const stopPoll = startExtractPolling();
-  try {
-    const r = await uploadXhr('/api/files/folder', fd, (p) => { $('#upBar').style.width = (p * 100).toFixed(1) + '%'; });
-    state.upload = r;
-    renderUpload();
-    log(`Folder diupload: ${r.totalFiles} file, ${fmtSize(r.totalSize)}${r.skipped ? ` · ${r.skipped} dilewati (node_modules/.git/dsb)` : ''}`, 'ok');
-  } catch (e) {
-    note('err', 'Upload folder gagal: ' + esc(e.message) + (e.hint ? ' — ' + esc(e.hint) : ''));
-  } finally {
-    stopPoll();
-    showUploadProgress(false);
-  }
-}
-
-/* tampilkan progres ekstraksi sisi server saat upload sudah 100% */
-function startExtractPolling() {
-  if (state.config.oneshot) return () => {}; // serverless: ekstraksi terjadi saat push
-  const t = setInterval(async () => {
-    try {
-      const p = await api('/api/files/progress');
-      if (p && p.total) {
-        $('#upText').textContent = `Memproses file di server… ${p.done}/${p.total}`;
-        $('#upBar').style.width = '100%';
-      }
-    } catch (_) {}
-  }, 700);
-  return () => clearInterval(t);
-}
-
-function renderUpload() {
-  const u = state.upload;
-  if (!u || !u.files) { $('#fileSummary').classList.add('hidden'); $('#fileTag').textContent = 'belum ada file'; return; }
-  $('#fileSummary').classList.remove('hidden');
-  $('#fileTag').textContent = `${u.totalFiles} file siap di-push`;
-  $('#statsBox').innerHTML = `
-    <div><b>${u.totalFiles}</b>file</div>
-    <div><b>${u.totalDirs || 0}</b>folder</div>
-    <div><b>${fmtSize(u.totalSize)}</b>total ukuran</div>
-    <div><b>${(u.topExtensions || []).slice(0, 4).map((e) => `.${esc(e.ext)} (${e.count})`).join(', ') || '-'}</b>tipe terbanyak</div>`;
-  $('#rootInfo').textContent = u.strippedRoot ? `folder pembungkus "${u.strippedRoot}" dibuang` : '';
-
-  // susun tampilan tree sederhana (folder + file, maks 400 baris)
-  const dirs = new Set();
-  const rows = [];
-  for (const f of u.files) {
-    const parts = f.path.split('/');
-    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
-    rows.push({ path: f.path, size: f.size, dir: false });
-  }
-  for (const d of dirs) rows.push({ path: d + '/', size: null, dir: true });
-  rows.sort((a, b) => a.path.localeCompare(b.path));
-  const shown = rows.slice(0, 400);
-  $('#fileTree').innerHTML = shown.map((r) =>
-    `<li class="${r.dir ? 'dir' : ''}"><span>${r.dir ? '📁' : '📄'} ${esc(r.path)}</span>${r.size != null ? `<span class="sz">${fmtSize(r.size)}</span>` : ''}</li>`).join('')
-    + (rows.length > shown.length ? `<li class="dir">… +${rows.length - shown.length} baris lagi</li>` : '');
-
-  const big = (u.largest || []).filter((f) => f.size > 90 * 1048576);
-  if (big.length) note('warn', `Ada file mendekati/melebihi batas 100 MB API GitHub: ${big.map((b) => esc(b.path) + ' (' + fmtSize(b.size) + ')').join(', ')}`, '#demoBanner');
-  updatePushReady();
-}
-
-async function loadExistingUpload() {
-  if (state.config.oneshot) return; // tidak ada penyimpanan antar-request
-  try {
-    const r = await api('/api/files');
-    if (r.has) { state.upload = r; renderUpload(); log('File dari sesi sebelumnya masih tersedia di server.', 'dim'); }
-  } catch (_) {}
-}
-
-/* ---------------- push ---------------- */
-function currentBranch() {
-  return state.useNewBranch ? ($('#newBranch').value.trim() || state.branch) : ($('#branchSelect').value || state.branch);
-}
-
-function updatePushReady() {
-  const okFiles = !!(state.upload && state.upload.files && state.upload.files.length);
-  const okRepo = !!$('#repoSelect').value;
-  const okBranch = !!currentBranch();
-  $('#btnPush').disabled = !(okFiles && okRepo && okBranch);
-  $('#btnPreview').disabled = !okFiles;
-}
-
-function buildPayload(extra = {}) {
-  return {
-    repo: $('#repoSelect').value,
-    branch: currentBranch(),
-    destPath: $('#destPath').value.trim(),
-    message: $('#commitMsg').value.trim(),
-    createBranch: state.useNewBranch,
-    baseBranch: $('#optBaseBranch').value.trim(),
-    overwrite: $('#optOverwrite').checked,
-    deleteExisting: $('#optDelete').checked,
-    dryRun: $('#optDry').checked,
-    useMock: $('#optMock') ? $('#optMock').checked : false,
-    ...extra,
-  };
-}
-
-async function doPreview() {
-  if (state.config.oneshot) {
-    const fd = new FormData();
-    if (state.localZip) fd.append('zip', state.localZip.file, state.localZip.file.name);
-    else if (state.localFolder) {
-      const relPaths = [];
-      for (const it of state.localFolder) {
-        const rel = it.file.webkitRelativePath || it.file.relativePath || it.path;
-        fd.append('files', it.file, rel); relPaths.push(rel);
-      }
-      fd.append('relPaths', JSON.stringify(relPaths));
-    } else return alert('Pilih ZIP atau folder terlebih dahulu.');
-    fd.append('stripRoot', $('#stripRoot').checked ? '1' : '0');
-    Object.entries(buildPayload({ dryRun: true })).forEach(([k, v]) => {
-      if (v !== null && v !== undefined && v !== '') fd.append(k, String(v));
-    });
-    $('#resultCard').classList.remove('hidden');
-    $('#log').innerHTML = ''; $('#resultNote').innerHTML = ''; $('#resultLinks').innerHTML = '';
-    try {
-      const r = await uploadXhr('/api/push-upload', fd, () => {});
-      $('#pushProgress').classList.add('hidden');
-      renderPushResult(r);
-    } catch (e) {
-      $('#resultTag').textContent = 'gagal';
-      note('err', esc(e.message), '#resultNote');
-    }
-    return;
-  }
-  $('#resultCard').classList.remove('hidden');
-  $('#log').innerHTML = '';
-  $('#resultNote').innerHTML = '';
-  $('#resultLinks').innerHTML = '';
-  try {
-    const r = await api('/api/push', { method: 'POST', body: buildPayload({ dryRun: true }) });
-    $('#resultTag').textContent = 'rencana commit';
-    note('info', `<b>Dry-run.</b> Tidak ada yang dikirim ke GitHub.<br/>
-      Repo <b>${esc(r.plan.repo)}</b> · branch <b>${esc(r.plan.branch)}</b>${r.plan.createBranch ? ' (baru)' : ''} · folder <b>${esc(r.plan.destPath)}</b><br/>
-      ${r.plan.files} file · ${fmtSize(r.plan.bytes)} · pesan: "${esc(r.plan.message)}"<br/>
-      <span style="color:var(--fg3)">Urutan API: ${r.plan.apiCalls.map(esc).join(' → ')}</span>`, '#resultNote');
-    r.preview.slice(0, 60).forEach((f) => log(`📄 ${esc(f.path)}  <span class="dim">${fmtSize(f.size)}</span>`));
-    if (r.preview.length > 60) log(`… +${r.preview.length - 60} file lainnya`, 'dim');
-  } catch (e) {
-    $('#resultTag').textContent = 'gagal';
-    note('err', esc(e.message) + (e.hint ? ' — ' + esc(e.hint) : ''), '#resultNote');
-  }
-}
-
-async function doPush() {
-  const payload = buildPayload();
-  if (!payload.repo) return alert('Pilih repository dulu.');
-  if (!payload.branch) return alert('Tentukan branch tujuan.');
-
-  // validasi branch: sudah ada atau memang mau dibuat baru
-  if (!payload.createBranch && state.branches.length && !state.branches.some((b) => b.name === payload.branch)) {
-    const yes = confirm(`Branch "${payload.branch}" belum ada di repo ini.\n\nBuat branch baru dari "${state.selectedRepo?.default_branch || 'main'}"?`);
-    if (!yes) return;
-    payload.createBranch = true;
-  }
-  if (payload.createBranch && state.branches.some((b) => b.name === payload.branch)) {
-    payload.createBranch = false; // branch-nya ternyata sudah ada
-  }
-  if (payload.deleteExisting && payload.destPath &&
-      !confirm(`File lama di folder "${payload.destPath}" yang tidak ada di upload akan DIHAPUS dari branch ${payload.branch}. Lanjutkan?`)) return;
-
-  if (state.config.oneshot) return doOneShotPush(payload);
-
-  $('#resultCard').classList.remove('hidden');
-  $('#log').innerHTML = ''; $('#resultNote').innerHTML = ''; $('#resultLinks').innerHTML = '';
-  $('#resultTag').textContent = 'memproses…';
-  $('#pushProgress').classList.remove('hidden');
-  $('#pushBar').style.width = '5%';
-  $('#pushStage').textContent = 'Menghubungi GitHub…';
-  $('#btnPush').disabled = true;
-
-  log(`Mulai push ${state.upload.totalFiles} file ke <b>${esc(payload.repo)}</b> → <b>${esc(payload.branch)}</b>${payload.destPath ? '/' + esc(payload.destPath) : ''}`);
-  startProgressPolling();
-
-  try {
-    const r = await api('/api/push', { method: 'POST', body: payload });
-    stopProgressPolling();
-    $('#pushBar').style.width = '100%';
-
-    if (r.dryRun) {
-      $('#resultTag').textContent = 'dry-run selesai';
-      note('warn', `<b>Dry-run</b> (${esc(r.reason)}): tidak ada perubahan di GitHub.<br/>
-        Rencana: ${r.plan.files} file · ${fmtSize(r.plan.bytes)} → <b>${esc(r.plan.repo)}@${esc(r.plan.branch)}</b>${r.plan.destPath !== '(root)' ? '/' + esc(r.plan.destPath) : ''}`, '#resultNote');
-      r.preview.slice(0, 60).forEach((f) => log(`📄 ${esc(f.path)}`));
-      log('Selesai (dry-run).', 'warn');
-    } else {
-      $('#resultTag').textContent = 'sukses ✓';
-      $('#pushStage').textContent = 'Selesai';
-      note('ok', `<b>${r.mock ? 'Berhasil (simulasi)!' : 'Berhasil!'}</b> Commit <code>${esc(r.shortSha)}</code> masuk ke branch <b>${esc(r.branch)}</b>${r.branchCreated ? ' (branch baru dibuat)' : ''}.<br/>
-        ${r.files.length} file di-commit${r.overwritten.length ? ` · ${r.overwritten.length} file ditimpa` : ''}${r.removed.length ? ` · ${r.removed.length} file lama dihapus` : ''}.`, '#resultNote');
-      if (r.commitUrl) {
-        $('#resultLinks').innerHTML = `
-          <a class="btnlink" style="padding:8px 12px" href="${esc(r.commitUrl)}" target="_blank" rel="noopener">🔗 Lihat commit</a>
-          <a class="btnlink" style="padding:8px 12px" href="${esc(r.treeUrl)}" target="_blank" rel="noopener">📂 Lihat folder di repo</a>`;
-      } else {
-        note('info', 'Push dilakukan ke <b>GitHub tiruan</b> di memori server (tidak ada repo nyata yang berubah). Data hilang saat server dimatikan.', '#resultNote');
-      }
-      log(`Commit ${esc(r.shortSha)}${r.commitUrl ? ' → ' + esc(r.commitUrl) : ' (simulasi di memori server)'}`, 'ok');
-      r.files.slice(0, 40).forEach((f) => log(`✓ ${esc(f.path)} <span class="dim">${fmtSize(f.size)}</span>`, 'ok'));
-      if (r.files.length > 40) log(`… dan ${r.files.length - 40} file lainnya`, 'dim');
-    }
-  } catch (e) {
-    stopProgressPolling();
-    $('#resultTag').textContent = 'gagal';
-    $('#pushStage').textContent = 'Gagal';
-    note('err', `<b>Push gagal:</b> ${esc(e.message)}${e.hint ? '<br/>' + esc(e.hint) : ''}`, '#resultNote');
-    log('✖ ' + esc(e.message), 'err');
-  } finally {
-    $('#btnPush').disabled = false;
-    updatePushReady();
-  }
-}
-
 
 /** Tampilkan hasil push (dipakai mode biasa & mode sekali jalan). */
 function renderPushResult(r) {
@@ -1297,6 +931,13 @@ function bindApp() {
   const df = $('#dropFolder');
   df.onclick = () => $('#folderInput').click();
   $('#folderInput').onchange = (e) => handleFolderFiles(e.target.files);
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    const fh = document.createElement('p');
+    fh.className = 'hint';
+    fh.style.cssText = 'margin-top:8px;color:var(--fg3)';
+    fh.innerHTML = '📱 Di browser HP, memilih folder sering tidak didukung. Kalau tidak muncul pilihan folder, pakai tab <b>📦 ZIP</b> — buat ZIP dari aplikasi Files (pilih file/folder → ⋮ / Bagikan → <i>Kompres</i>).';
+    df.insertAdjacentElement('afterend', fh);
+  }
   ['dragenter', 'dragover'].forEach((ev) => df.addEventListener(ev, (e) => { e.preventDefault(); df.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => df.addEventListener(ev, (e) => { e.preventDefault(); df.classList.remove('over'); }));
   df.addEventListener('drop', async (e) => {
