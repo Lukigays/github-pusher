@@ -24,6 +24,7 @@ Sejak **v1.1.0** aplikasi ini **tidak bisa lagi crash saat start** di Vercel. La
 | Tombol **Push ke GitHub** abu-abu / tidak bisa dipencet | Tombol butuh 3 syarat: file siap + **repo terpilih** + branch. Daftar repo kosong selama token GitHub belum terhubung (sesi demo) | Hubungkan **Personal Access Token** (v1.1.4 menampilkan alasan persis di bawah tombol via `#pushHint`) |
 | Upload lewat **folder** tidak merespons di HP | Browser mobile (iOS & sebagian Android) tidak mendukung `<input webkitdirectory>` | Gunakan tab **📦 ZIP**: buat ZIP dari aplikasi Files (pilih file/folder → ⋮/Bagikan → *Kompres*), lalu upload ZIP-nya |
 | Push ditekan tapi **tidak terjadi apa-apa** di Vercel (tanpa pesan error) | Bug `public/app.js` ≤ v1.1.3: `doOneShotPush()` memanggil dirinya sendiri (rekursi tak hingga) + blok kode terduplikasi | Update ke **v1.1.4** (regression guard: `npm test` bagian 15) |
+| Push gagal: `Reference already exists` / GitHub 422 saat "buat branch baru" | Nama branch yang diminta ternyata sudah ada (sering karena daftar branch gagal dimuat, mis. jaringan putus) | Sejak **v1.1.5** server menulis ke branch yang sudah ada (idempoten) + UI otomatis memilih branch itu; regression guard: `npm test` bagian 16 |
 | Tidak ada log sama sekali | Config `vercel.json` tidak valid | Jalankan `vercel deploy` dari CLI agar error config terlihat |
 
 3. Setelah menambah/mengubah Environment Variables **wajib redeploy** (tombol *Redeploy* di dashboard, atau `vercel --prod`). Env tidak berlaku surut ke deployment lama.

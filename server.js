@@ -258,7 +258,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'github-zip-pusher',
-    version: '1.1.4',
+    version: '1.1.5',
     mode: SERVERLESS ? 'serverless' : 'server',
     vercel: IS_VERCEL,
     region: process.env.VERCEL_REGION || null,
