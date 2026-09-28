@@ -582,6 +582,7 @@ async function onRepoChange() {
     $('#branchSelect').innerHTML = `<option value="${esc(state.selectedRepo.default_branch)}">${esc(state.selectedRepo.default_branch)}</option>`;
     state.branch = state.selectedRepo.default_branch;
     $('#branchMeta').textContent = 'Gagal memuat branch: ' + e.message;
+    note('warn', `Daftar branch gagal dimuat (${esc(e.message)}) — nama branch tidak bisa dicek di aplikasi. Server v1.1.5+ menangani branch yang sudah ada secara otomatis; atau muat ulang halaman bila jaringan sempat putus.`, '#demoBanner');
   }
   state.useNewBranch = false;
   updatePushReady();
@@ -820,6 +821,10 @@ async function doPush() {
   if (payload.createBranch && state.branches.some((b) => b.name === payload.branch)) {
     payload.createBranch = false; // branch-nya ternyata sudah ada
   }
+  if (payload.createBranch && !state.branches.length && state.selectedRepo &&
+      payload.branch === (state.selectedRepo.default_branch || 'main')) {
+    payload.createBranch = false; // daftar branch gagal dimuat, tapi branch default pasti sudah ada
+  }
   if (payload.deleteExisting && payload.destPath &&
       !confirm(`File lama di folder "${payload.destPath}" yang tidak ada di upload akan DIHAPUS dari branch ${payload.branch}. Lanjutkan?`)) return;
 
@@ -969,6 +974,17 @@ function bindApp() {
   $('#btnUseNewBranch').onclick = () => {
     const v = $('#newBranch').value.trim();
     if (!v) return alert('Isi nama branch baru.');
+    if (state.branches.some((b) => b.name === v)) {
+      // branch sudah ada -> pakai sebagai tujuan, bukan dibuat baru (hindari 422 GitHub)
+      state.useNewBranch = false;
+      $('#newBranch').value = '';
+      $('#branchSelect').value = v;
+      state.branch = v;
+      note('info', `Branch <b>${esc(v)}</b> sudah ada di repo ini — otomatis dipilih sebagai branch tujuan (bukan dibuat baru).`);
+      $('#branchMeta').innerHTML = `Branch tujuan: <b>${esc(v)}</b> (sudah ada).`;
+      updatePushReady();
+      return;
+    }
     state.useNewBranch = true;
     $('#branchMeta').innerHTML = `Branch baru <b>${esc(v)}</b> akan dibuat dari <b>${esc($('#optBaseBranch').value.trim() || state.selectedRepo?.default_branch || 'main')}</b>.`;
     updatePushReady();
