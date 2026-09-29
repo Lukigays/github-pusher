@@ -502,6 +502,46 @@ async function main() {
     check('updatePushReady menjelaskan kenapa tombol Push disabled (#pushHint)', appJs.includes("$('#pushHint')"));
     check('index.html punya elemen #pushHint', idxHtml.includes('id="pushHint"'));
 
+
+    /* ---- 16. createBranch ke branch yang SUDAH ada => update, bukan 422 ---- */
+    console.log('\n▶ [16] createBranch idempoten');
+    const idem = await startDemoInstance(3118, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();
+    const idemCookieBak = cookie; cookie = '';
+    try {
+      const ireq = (m, u, o) => req(m, u, { ...o, base: idem.url });
+      let d = await ireq('GET', '/auth/github');
+      check('login demo (instance 16)', d.status === 302);
+      const zipBuf6 = await fsp.readFile(zipPath);
+      const mp12 = multipart({ stripRoot: '1' }, [{ field: 'zip', filename: 'p.zip', contentType: 'application/zip', content: zipBuf6 }]);
+      d = await ireq('POST', '/api/files/zip', { body: mp12.body, headers: mp12.headers, raw: true });
+      check('upload ZIP (instance 16)', d.status === 200);
+      d = await ireq('POST', '/api/link-token', { body: { token: 'ghp_mocktokenforlocaltestingonly' } });
+      check('link-token (instance 16)', d.status === 200);
+
+      d = await ireq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'main', createBranch: true, message: 'branch sudah ada' } });
+      check('createBranch=true ke branch ADA -> bukan 422', d.status === 200 && d.data?.ok === true, d.data?.error || '');
+      check('branchCreated=false (di-update, bukan dibuat)', d.data?.branchCreated === false);
+      check('commit masuk (dryRun=false)', d.data?.dryRun === false && !!d.data?.shortSha);
+
+      d = await ireq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'branch-baru-16', createBranch: true, message: 'branch baru' } });
+      check('createBranch=true ke branch BELUM ada -> dibuat', d.data?.ok === true && d.data?.branchCreated === true, d.data?.error || '');
+    } finally {
+      idem.stop();
+      cookie = idemCookieBak;
+    }
+
+    /* ---- 17. decoder CP437 browser-safe (bug TextDecoder ibm437) ---- */
+    console.log('\n▶ [17] CP437 browser-safe');
+    check("app.js TIDAK memakai new TextDecoder('ibm437') — invalid di semua browser",
+      !/new TextDecoder\(\s*['"](?:ibm|cp)?437['"]\s*\)/i.test(appJs));
+    const cpM = appJs.match(/const CP437_HIGH = '([^']*)'/);
+    check('tabel CP437_HIGH ada', !!cpM);
+    if (cpM) {
+      const tbl = cpM[1].replace(/\\u([0-9a-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+      check('tabel CP437 tepat 128 entri', [...tbl].length === 128, 'dapat ' + [...tbl].length);
+      check('pemetaan benar: 0x80=Ç 0x91=æ 0xA4=ñ', [...tbl][0] === 'Ç' && [...tbl][17] === 'æ' && [...tbl][36] === 'ñ');
+    }
+    check('scanZipLocal memakai decodeCp437(nameBytes)', appJs.includes('decodeCp437(nameBytes)'));
     /* ---- 14. sesi demo + hubungkan PAT => push SUNGGUHAN (bukan dry-run) ---- */
     console.log('\n▶ [14] demo -> PAT -> push sungguhan');
     const pat = await startDemoInstance(3117, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();
