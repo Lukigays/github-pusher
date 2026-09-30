@@ -582,6 +582,61 @@ async function main() {
       wp.stop();
       cookie = wpBak;
     }
+
+    /* ---- 19. chunked push: banyak request kecil -> satu commit ---- */
+    console.log('\n▶ [19] chunked push');
+    const ck = await startDemoInstance(3120, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}`, SERVERLESS: '1' }).ready();
+    const ckBak = cookie; cookie = '';
+    try {
+      const creq = (m, u, o) => req(m, u, { ...o, base: ck.url });
+      let d = await creq('GET', '/auth/github');
+      check('login demo (instance 19)', d.status === 302);
+
+      d = await creq('POST', '/api/push-chunk', { body: {}, raw: true });
+      check('push-chunk tanpa token -> 400', d.status === 400, 'status ' + d.status);
+
+      d = await creq('POST', '/api/link-token', { body: { token: 'ghp_mocktokenforlocaltestingonly' } });
+      check('link-token (instance 19)', d.status === 200);
+
+      const mk = (name, content) => ({ field: 'files', filename: name, contentType: 'application/octet-stream', content: Buffer.from(content) });
+      const mpA = multipart({ repo: 'octo/demo-repo', relPaths: JSON.stringify(['bagian/a.txt', 'bagian/b.css']) },
+        [mk('bagian/a.txt', 'isi file a'), mk('bagian/b.css', 'body{color:red}')]);
+      d = await creq('POST', '/api/push-chunk', { body: mpA.body, headers: mpA.headers, raw: true });
+      check('chunk 1 -> 2 blob', d.status === 200 && d.data?.items?.length === 2, d.data?.error || '');
+      const items1 = d.data?.items || [];
+
+      const mpB = multipart({ repo: 'octo/demo-repo', relPaths: JSON.stringify(['bagian/c.js']) }, [mk('bagian/c.js', 'console.log(1)')]);
+      d = await creq('POST', '/api/push-chunk', { body: mpB.body, headers: mpB.headers, raw: true });
+      check('chunk 2 -> 1 blob', d.status === 200 && d.data?.items?.length === 1, d.data?.error || '');
+      const allItems = [...items1, ...(d.data?.items || [])];
+      check('sha blob valid (40 hex)', allItems.every((it) => /^[0-9a-f]{40}$/i.test(it.sha)));
+
+      d = await creq('POST', '/api/push-commit', { body: { repo: 'octo/demo-repo', branch: 'chunk-19', items: [{ path: 'x.txt', size: 1, mode: 420, sha: 'bukan-sha' }] } });
+      check('push-commit sha invalid -> 400', d.status === 400, 'status ' + d.status);
+
+      d = await creq('POST', '/api/push-commit', {
+        body: { repo: 'octo/demo-repo', branch: 'chunk-19', message: 'commit dari chunk', items: allItems },
+      });
+      check('push-commit -> commit sukses', d.status === 200 && d.data?.ok === true && d.data?.branchCreated === true, d.data?.error || '');
+      check('3 file masuk commit', (d.data?.files || []).length === 3);
+
+      d = await creq('GET', '/api/tree/octo/demo-repo');
+      // tree endpoint membaca branch utama; cek lewat push-commit dryRun zamiast
+      d = await creq('POST', '/api/push-commit', {
+        body: { repo: 'octo/demo-repo', branch: 'chunk-19', dryRun: true, items: [{ path: 'y.txt', size: 10, mode: 420, sha: null }, { path: 'z.txt', size: 5, mode: 420, sha: null }] },
+      });
+      check('dryRun tanpa sha blob -> plan', d.status === 200 && d.data?.dryRun === true && d.data?.plan?.files === 2, d.data?.error || '');
+
+      d = await creq('POST', '/api/push-commit', { body: { repo: 'octo/demo-repo', branch: 'chunk-19', items: [] } });
+      check('items kosong -> 400', d.status === 400, 'status ' + d.status);
+    } finally {
+      ck.stop();
+      cookie = ckBak;
+    }
+
+    /* sanitas frontend chunked */
+    check('app.js punya pipeline chunked (/api/push-chunk & push-commit)', appJs.includes("'/api/push-chunk'") && appJs.includes("'/api/push-commit'"));
+    check('app.js ekstraksi ZIP di browser (deflate-raw)', appJs.includes("DecompressionStream('deflate-raw')"));
     /* ---- 14. sesi demo + hubungkan PAT => push SUNGGUHAN (bukan dry-run) ---- */
     console.log('\n▶ [14] demo -> PAT -> push sungguhan');
     const pat = await startDemoInstance(3117, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();

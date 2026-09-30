@@ -27,7 +27,7 @@ const multer = require('multer');
 
 const { extractZip, extractZipBuffer, collectFolder, collectFolderMemory } = require('./lib/extractor');
 const { cookieSession } = require('./lib/cookiesession');
-const { GitHub, API, MAX_API_FILE_BYTES, createMockGitHub } = require('./lib/github');
+const { GitHub, API, pMap, MAX_API_FILE_BYTES, createMockGitHub } = require('./lib/github');
 const { verifyIdToken } = require('./lib/google');
 
 /* ------------------------------------------------------------------ */
@@ -235,6 +235,12 @@ const zipUpload = multer({
   },
 });
 
+/* Chunked push: banyak request kecil (masing-masing <= batas Vercel 4,5 MB). */
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_API_FILE_BYTES, files: 2000, fieldSize: 4 * 1024 * 1024 },
+});
+
 const folderUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
@@ -258,7 +264,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'github-zip-pusher',
-    version: '1.1.7',
+    version: '1.1.8',
     mode: SERVERLESS ? 'serverless' : 'server',
     vercel: IS_VERCEL,
     region: process.env.VERCEL_REGION || null,
@@ -644,6 +650,122 @@ app.delete('/api/files', requireAuth, noDiskOnServerless, asyncH(async (req, res
  *  - Body request dibatasi 4,5 MB                  -> ZIP/folder kecil saja.
  * Jadi: upload + ekstrak (di memori) + push dilakukan dalam SATU request.
  */
+/* ------------------------------------------------------------------ */
+/* ROUTE: CHUNKED PUSH (lolos batas 4,5 MB Vercel untuk proyek besar)  */
+/* ------------------------------------------------------------------ */
+/**
+ * Vercel membatasi body request Fungsi sebesar 4,5 MB (level infrastruktur,
+ * tidak bisa dikonfigurasi). Akalnya: blob diunggah per bagian kecil lewat
+ * /api/push-chunk (blob bersifat content-addressed & bertahan di GitHub),
+ * lalu SATU request /api/push-commit merakit tree + commit + ref dari
+ * daftar sha yang dikumpulkan browser. Total ukuran jadi praktis tak terbatas.
+ */
+app.post('/api/push-chunk', requireAuth, rateLimit('chunk', 120, 60_000), chunkUpload.array('files', 2000), asyncH(async (req, res) => {
+  const { gh } = getGitHub(req);
+  if (!gh || isDemoSession(req)) {
+    return res.status(400).json({
+      error: 'Chunked push butuh token GitHub asli.',
+      hint: 'Hubungkan Personal Access Token atau login GitHub terlebih dahulu.',
+    });
+  }
+  const fullName = String(req.body?.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return res.status(400).json({ error: 'Format repo harus "owner/nama-repo".' });
+  const [owner, repo] = fullName.split('/');
+
+  const uploaded = req.files || [];
+  if (!uploaded.length) return res.status(400).json({ error: 'Tidak ada file di bagian ini.' });
+  let relPaths = null;
+  try { relPaths = req.body?.relPaths ? JSON.parse(req.body.relPaths) : null; } catch (_) { relPaths = null; }
+  if (!Array.isArray(relPaths) || relPaths.length !== uploaded.length) relPaths = null;
+
+  const items = await pMap(uploaded, 5, async (f, i) => {
+    let rel = String((relPaths && relPaths[i]) || f.originalname || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel.split('/').some((seg) => seg === '..' || seg === '.')) {
+      const e = new Error('Path file tidak valid di chunk.'); e.status = 400; throw e;
+    }
+    const { data } = await gh.request('POST', `/repos/${owner}/${repo}/git/blobs`, {
+      content: f.buffer.toString('base64'),
+      encoding: 'base64',
+    });
+    return {
+      path: rel,
+      mode: /\.(sh|bash|py|pl|rb)$/i.test(rel) ? 0o755 : 0o644,
+      sha: data.sha,
+      size: f.buffer.length,
+    };
+  });
+  res.json({ ok: true, count: items.length, items });
+}));
+
+app.post('/api/push-commit', requireAuth, rateLimit('commit', 20, 60_000), asyncH(async (req, res) => {
+  const b = req.body || {};
+  const fullName = String(b.repo || '').trim();
+  const branch = String(b.branch || '').trim();
+  const destPath = String(b.destPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const dryRun = !!b.dryRun;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return res.status(400).json({ error: 'Format repo harus "owner/nama-repo".' });
+  if (!branch || /[~^:?*\[\]@{}\\]/.test(branch) || branch.includes('..') || branch.endsWith('.lock')) {
+    return res.status(400).json({ error: 'Nama branch tidak valid.' });
+  }
+  if (destPath.split('/').some((seg) => seg === '..' || seg === '.')) {
+    return res.status(400).json({ error: 'Path tujuan tidak valid.' });
+  }
+  const items = Array.isArray(b.items) ? b.items : null;
+  if (!items || !items.length) return res.status(400).json({ error: 'items wajib diisi (hasil /api/push-chunk).' });
+  if (items.length > 20000) return res.status(400).json({ error: 'Terlalu banyak file dalam satu commit (maks 20.000).' });
+  if (!dryRun) {
+    for (const it of items) {
+      if (!it || !/^[0-9a-f]{40}$/i.test(String(it.sha || ''))) {
+        return res.status(400).json({ error: 'items tidak valid: sha blob hilang — upload ulang bagian (chunk)nya.', hint: 'Blob mungkin belum terunggah.' });
+      }
+    }
+  }
+  const { gh } = getGitHub(req);
+  if (!gh || isDemoSession(req)) {
+    return res.status(400).json({ error: 'Push butuh token GitHub asli.', hint: 'Hubungkan Personal Access Token atau login GitHub terlebih dahulu.' });
+  }
+  const [owner, repo] = fullName.split('/');
+  const message = String(b.message || '').trim() || `Upload ${new Date().toISOString().slice(0, 10)} via github-zip-pusher (chunked)`;
+
+  if (dryRun) {
+    const prefix = destPath ? destPath + '/' : '';
+    return res.json({
+      ok: true, dryRun: true, reason: 'dryRun diminta', chunked: true,
+      plan: {
+        repo: fullName, branch, destPath: destPath || '(root)', message,
+        overwrite: b.overwrite !== false, deleteExisting: !!b.deleteExisting,
+        files: items.length,
+        bytes: items.reduce((a, f) => a + (Number(f.size) || 0), 0),
+        apiCalls: [
+          `(blob sudah diunggah per bagian via /api/push-chunk)`,
+          `GET  /repos/${fullName}/git/commits/{parentSha}`,
+          `POST /repos/${fullName}/git/trees      (base_tree = tree branch tujuan)`,
+          `POST /repos/${fullName}/git/commits    (1 commit untuk semua file)`,
+          `PATCH/POST /repos/${fullName}/git/refs/heads/${branch}`,
+        ],
+      },
+      preview: items.slice(0, 200).map((f) => ({ path: prefix + f.path, size: Number(f.size) || 0 })),
+    });
+  }
+
+  const info0 = await gh.repoPermission(owner, repo);
+  if (info0.permission === 'pull') {
+    return res.status(403).json({ error: `Token Anda hanya punya akses baca ke ${fullName}.`, hint: 'Gunakan akun/token dengan izin push, atau pilih repo lain.' });
+  }
+  const me = req.session.user || {};
+  req.session.pushProgress = { stage: 'tree' };
+  const result = await gh.pushItems({
+    owner, repo, branch, destPath, message,
+    items: items.map((f) => ({ path: String(f.path), mode: Number(f.mode) || 0o644, sha: String(f.sha), size: Number(f.size) || 0 })),
+    overwrite: b.overwrite !== false,
+    deleteExisting: !!b.deleteExisting,
+    baseBranch: String(b.baseBranch || '').trim() || null,
+    author: me.provider === 'github' ? { name: me.name || me.login, email: me.email, login: me.login } : undefined,
+    onProgress: (stage, data) => { req.session.pushProgress = { stage, ...data, at: Date.now() }; },
+  });
+  res.json({ ok: true, dryRun: false, chunked: true, ...result });
+}));
+
 /* ---- WIPE: hapus SEMUA file di sebuah branch (commit tree kosong) ---- */
 app.post('/api/wipe', requireAuth, rateLimit('wipe', 5, 60_000), asyncH(async (req, res) => {
   const b = req.body || {};

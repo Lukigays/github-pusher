@@ -300,6 +300,8 @@ async function scanZipLocal(file) {
     entries.push({
       path: name.replace(/\\/g, '/').replace(/^\/+/, ''),
       size: usize,
+      csize,
+      offset: view.getUint32(p + 42, true),
       dir: isDir,
       encrypted: (flags & 0x1) !== 0,
       stored: method === 0,
@@ -335,7 +337,7 @@ function commonRoot(paths) {
 /** Pratinjau ZIP sepenuhnya di browser (tanpa upload). */
 async function previewZipLocal(file) {
   if (file.size > state.config.maxUploadMB * 1048576) {
-    return note('err', `ZIP ${(fmtSize(file.size))} melebihi batas <b>${state.config.maxUploadMB} MB</b> di Vercel (limit 4,5 MB per request). Gunakan CLI atau server sendiri untuk file besar.`);
+    note('info', `ZIP besar (${fmtSize(file.size)}) akan di-push <b>per bagian</b> (chunked, masing-masing ≤ 4 MB) — batas 4,5 MB Vercel hanya berlaku per request. ZIP dipecah di browser Anda.`, '#demoBanner');
   }
   showUploadProgress(true);
   $('#upText').textContent = 'Membaca daftar isi ZIP di browser…';
@@ -349,9 +351,11 @@ async function previewZipLocal(file) {
     let paths = list.map((e) => e.path);
     const kept = filteredPaths(paths);
     const root = strip ? commonRoot(kept) : null;
+    const enc2 = list.filter((e) => e.encrypted);
     const files = list
-      .filter((e) => kept.includes(e.path))
-      .map((e) => ({ path: root ? e.path.slice(root.length + 1) : e.path, size: e.size }));
+      .filter((e) => kept.includes(e.path) && !e.encrypted)
+      .map((e) => ({ path: root ? e.path.slice(root.length + 1) : e.path, size: e.size, entry: e }));
+    if (enc2.length) note('warn', `${enc2.length} file terenkripsi password dilewati (tidak bisa di-push).`, '#demoBanner');
 
     state.localZip = { file, entries };
     state.upload = {
@@ -390,7 +394,7 @@ function previewFolderLocal(fileList) {
 
   const totalSz = files.reduce((a, f) => a + f.size, 0);
   if (state.config.oneshot && totalSz > state.config.maxUploadMB * 1048576) {
-    note('warn', `Total isi folder ${fmtSize(totalSz)} melebihi batas <b>${state.config.maxUploadMB} MB</b> mode sekali jalan (Vercel). Push akan ditolak server — kurangi isi folder, atau jalankan di server sendiri/CLI.`, '#demoBanner');
+    note('info', `Folder besar (${fmtSize(totalSz)}) akan di-push <b>per bagian</b> (chunked, masing-masing ≤ 4 MB) sehingga lolos batas 4,5 MB per request di Vercel.`, '#demoBanner');
   }
   const rel = files.map((f) => f.webkitRelativePath || f.relativePath || f.name);
   const kept = filteredPaths(rel);
@@ -418,6 +422,93 @@ function previewFolderLocal(fileList) {
   updatePushReady();
 }
 
+const CHUNK_BYTES = 4 * 1048576;   // <= batas body Vercel 4,5 MB (dengan margin)
+const CHUNK_FILES = 250;            // batas jumlah file per bagian
+const CHUNK_TRIGGER = 3 * 1048576;  // di atas ini pakai chunked push
+
+function modeForPath(rel) { return /\.(sh|bash|py|pl|rb)$/i.test(rel) ? 0o755 : 0o644; }
+
+/* inflate deflate-raw bawaan browser (tanpa library) */
+async function inflateRaw(bytes) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Browser ini tidak mendukung DecompressionStream (butuh Chrome/Edge 80+, Firefox 102+, Safari 16.4+). Gunakan browser terbaru atau CLI.');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/* sumber file: folder yang dipilih user */
+async function* folderSource() {
+  for (const it of state.localFolder || []) {
+    yield { path: it.path, mode: modeForPath(it.path), bytes: new Uint8Array(await it.file.arrayBuffer()) };
+  }
+}
+
+/* sumber file: isi ZIP diekstrak langsung di browser (per entri, hemat memori) */
+async function* zipSource() {
+  const lz = state.localZip;
+  if (!lz) return;
+  for (const f of lz.files || []) {
+    const e = f.entry;
+    if (!e) continue;
+    const hdr = new DataView(await lz.file.slice(e.offset, e.offset + 30).arrayBuffer());
+    const nLen = hdr.getUint16(26, true);
+    const eLen = hdr.getUint16(28, true);
+    const start = e.offset + 30 + nLen + eLen;
+    const raw = new Uint8Array(await lz.file.slice(start, start + e.csize).arrayBuffer());
+    const bytes = e.stored ? raw : await inflateRaw(raw);
+    yield { path: f.path, mode: modeForPath(f.path), bytes };
+  }
+}
+
+/**
+ * Chunked push: unggah blob per bagian kecil (<= 4 MB) ke /api/push-chunk,
+ * kumpulkan sha-nya, lalu rakit tree+commit lewat /api/push-commit.
+ * Lolos batas 4,5 MB per request Vercel untuk proyek berukuran berapa pun.
+ */
+async function chunkedPush(payload) {
+  const total = (state.upload && state.upload.totalSize) || 1;
+
+  if (payload.dryRun) {
+    const meta = (state.upload.files || []).map((f) => ({ path: f.path, size: f.size, mode: modeForPath(f.path), sha: null }));
+    return await api('/api/push-commit', { method: 'POST', body: { ...payload, items: meta } });
+  }
+
+  const src = state.localZip ? zipSource() : folderSource();
+  const items = [];
+  let chunk = [], chunkSize = 0, part = 0, sent = 0;
+
+  const flush = async () => {
+    if (!chunk.length) return;
+    part++;
+    const fd = new FormData();
+    chunk.forEach((it) => fd.append('files', new Blob([it.bytes], { type: 'application/octet-stream' }), it.path));
+    fd.append('relPaths', JSON.stringify(chunk.map((c) => c.path)));
+    fd.append('repo', payload.repo);
+    $('#pushStage').textContent = `Mengupload bagian ${part} (${fmtSize(chunkSize)})…`;
+    const sizeNow = chunkSize;
+    const r = await uploadXhr('/api/push-chunk', fd, (pp) => {
+      $('#pushBar').style.width = (5 + ((sent + pp * sizeNow) / total) * 70).toFixed(1) + '%';
+    });
+    sent += sizeNow;
+    items.push(...(r.items || []));
+    log(`✔ Bagian ${part}: ${chunk.length} file (${fmtSize(sizeNow)}) → blob GitHub.`, 'dim');
+    chunk = []; chunkSize = 0;
+  };
+
+  for await (const f of src) {
+    if (f.bytes.byteLength > 100 * 1048576) throw new Error(`File ${f.path} melebihi 100 MB (batas API GitHub).`);
+    chunk.push(f); chunkSize += f.bytes.byteLength;
+    if (chunkSize >= CHUNK_BYTES || chunk.length >= CHUNK_FILES) await flush();
+  }
+  await flush();
+  if (!items.length) throw new Error('Tidak ada file yang bisa di-push.');
+
+  $('#pushStage').textContent = `Merakit tree + commit (${items.length} file)…`;
+  $('#pushBar').style.width = '80%';
+  return await api('/api/push-commit', { method: 'POST', body: { ...payload, items } });
+}
+
 /** Upload + push dalam satu request (multipart). */
 async function doOneShotPush(payload) {
   const fd = new FormData();
@@ -435,11 +526,39 @@ async function doOneShotPush(payload) {
     alert('Pilih ZIP atau folder terlebih dahulu.');
     return;
   }
+  const total = (state.upload && state.upload.totalSize) || 0;
+  const useChunked = total > CHUNK_TRIGGER;
+
   fd.append('stripRoot', $('#stripRoot').checked ? '1' : '0');
   if ($('#codepage') && $('#codepage').value) fd.append('codepage', $('#codepage').value);
   for (const [k, v] of Object.entries(payload)) {
     if (v === null || v === undefined || v === '') continue;
     fd.append(k, typeof v === 'boolean' ? String(v) : String(v));
+  }
+
+  if (useChunked) {
+    $('#resultCard').classList.remove('hidden');
+    $('#log').innerHTML = ''; $('#resultNote').innerHTML = ''; $('#resultLinks').innerHTML = '';
+    $('#resultTag').textContent = 'memproses…';
+    $('#pushProgress').classList.remove('hidden');
+    $('#pushBar').style.width = '3%';
+    $('#pushStage').textContent = 'Menyiapkan bagian upload…';
+    $('#btnPush').disabled = true;
+    log(`Mode chunked: ${fmtSize(total)} diunggah per bagian ≤ 4 MB, lalu commit dirakit server (lolos batas Vercel).`);
+    try {
+      const r = await chunkedPush(payload);
+      $('#pushBar').style.width = '100%';
+      renderPushResult(r);
+    } catch (e) {
+      $('#resultTag').textContent = 'gagal';
+      $('#pushStage').textContent = 'Gagal';
+      note('err', `<b>Push gagal:</b> ${esc(e.message)}${e.hint ? '<br/>' + esc(e.hint) : ''}`, '#resultNote');
+      log('✖ ' + esc(e.message), 'err');
+    } finally {
+      $('#btnPush').disabled = false;
+      updatePushReady();
+    }
+    return;
   }
 
   $('#resultCard').classList.remove('hidden');
@@ -517,7 +636,7 @@ async function showApp() {
   if (state.config.mockEnabled && !ghConnected && $('#optMockRow')) $('#optMockRow').classList.remove('hidden');
   if (state.config.oneshot) {
     note('info', `<b>Mode serverless (Vercel).</b> Upload &amp; push digabung jadi satu request karena <code>/tmp</code> tidak persisten.
-      Batas Vercel: <b>4,5 MB</b> per request (tidak bisa dinaikkan) — untuk proyek lebih besar pakai <code>cli/push.js</code> dari komputer Anda atau deploy ke VPS/Railway/Render.`, '#demoBanner');
+      Batas Vercel: <b>4,5 MB per request</b> (tidak bisa dinaikkan) — tapi sejak v1.1.8 upload besar otomatis di-push <b>per bagian (chunked)</b> sehingga total ukuran praktis tak terbatas. CLI/VPS tetap tersedia untuk file raksasa.`, '#demoBanner');
     const t = $('#fileTag'); if (t) t.textContent = 'pratinjau lokal';
   }
   if (!ghConnected) {

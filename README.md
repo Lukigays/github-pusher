@@ -37,12 +37,13 @@ Aplikasi web (Node.js + Express) untuk **login GitHub/Google**, lalu **upload fo
 | Folder tujuan | Push ke root atau subfolder, mis. `public/assets` |
 | Timpa / jangan timpa | `overwrite=false` → error 409 + daftar file konflik |
 | Ganti isi folder | `deleteExisting` → file lama di folder tujuan yang tidak ada di upload ikut dihapus |
+| **Chunked push (v1.1.8)** | Lolos batas 4,5 MB per request Vercel: blob diunggah per bagian ≤ 4 MB lalu dirakit jadi satu commit — total ukuran praktis tak terbatas; ZIP diekstrak di browser (DecompressionStream) |
 | **🗑 Wipe branch (zona berbahaya)** | Hapus SEMUA file di branch terpilih lewat satu commit tree kosong (`POST /api/wipe`) + konfirmasi ganda di UI (ketik nama branch). Riwayat utuh; pemulihan = revert commit. Butuh token asli, rate-limit 5x/menit |
 | Dry-run | Lihat rencana commit + urutan panggilan API tanpa menyentuh repo |
 | Progress real-time | Bar progres upload, ekstraksi, dan unggah blob (polling `/api/push/progress`) |
 | Mode demo + GitHub tiruan | Tanpa kredensial apa pun tetap bisa mencoba **alur push penuh** (in-memory) |
 | CLI | `node cli/push.js` untuk push dari terminal / script / CI |
-| Uji otomatis | 145 pengujian end-to-end (mock GitHub API + mode serverless) |
+| Uji otomatis | 158 pengujian end-to-end (mock GitHub API + mode serverless) |
 | **Siap Vercel** | Mode serverless: sesi cookie HMAC, semua di memori, upload+push 1 request — lihat `README-VERCEL.md` |
 
 ---

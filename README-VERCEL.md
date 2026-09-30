@@ -35,7 +35,7 @@ Sejak **v1.1.0** aplikasi ini **tidak bisa lagi crash saat start** di Vercel. La
 
 | Batas | Nilai | Dampak ke aplikasi ini |
 |---|---|---|
-| **Ukuran body request** | **4,5 MB** (semua plan, termasuk Pro) | ZIP/folder yang diupload **maks ±4,3 MB**. Melebihi itu → `413 FUNCTION_PAYLOAD_TOO_LARGE` dari Vercel, fungsi tidak pernah terpanggil. |
+| **Ukuran body request** | **4,5 MB** (semua plan, termasuk Pro) | Per request maks ±4,3 MB; melebihi itu → `413 FUNCTION_PAYLOAD_TOO_LARGE`. **Sejak v1.1.8** upload > 3 MB otomatis memakai **chunked push**: blob diunggah per bagian ≤ 4 MB (`/api/push-chunk`) lalu dirakit satu commit (`/api/push-commit`) → **total ukuran praktis tak terbatas** meski tetap di Vercel. |
 | **Disk `/tmp`** | 512 MB, **tidak persisten** antar-request | Tidak bisa "upload dulu → push nanti". Aplikasi otomatis pindah ke **mode sekali jalan**: upload + ekstrak + push dalam **satu** request, semua di RAM. |
 | **Memori fungsi** | 1 GB (Hobby) / s.d. 4 GB (Pro) | Isi file ditampung di RAM → jumlah file dibatasi `MAX_FILES=300`. |
 | **Durasi fungsi** | 60 s (Hobby default) / maks 300 s | Push ribuan file bisa kena timeout. `maxDuration: 300` sudah diset di `vercel.json`. |
@@ -189,7 +189,7 @@ curl -s -X POST localhost:3000/api/files/zip
 
 | Gejala | Sebab & solusi |
 |---|---|
-| `413 FUNCTION_PAYLOAD_TOO_LARGE` | ZIP/folder > 4,5 MB. Batas infrastruktur Vercel — pakai CLI atau platform lain (bagian 0). |
+| `413 FUNCTION_PAYLOAD_TOO_LARGE` | Satu request > 4,5 MB. Batas infrastruktur Vercel — sejak v1.1.8 aplikasi otomatis memecah upload (chunked push); bila tetap muncul berarti memakai kode lama, update ZIP. CLI/VPS untuk kasus ekstrem. |
 | Login berhasil lalu balik ke halaman login | `SESSION_SECRET` tidak di-set (rahasia acak per-instance) **atau** berbeda antar environment. Set satu nilai tetap. |
 | `redirect_uri_mismatch` | Callback URL di OAuth App ≠ `https://domain-anda/auth/github/callback`. Anda mungkin sedang membuka URL preview. |
 | Halaman putih / `Cannot GET /` | `rewrites` di `vercel.json` belum diterapkan — pastikan file `vercel.json` ada di root repo dan `api/index.js` ada. |
