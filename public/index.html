@@ -269,6 +269,15 @@
           </button>
         </div>
         <p class="hint hidden" id="pushHint" style="margin:8px 2px 0;color:var(--fg3)"></p>
+
+        <details id="dangerZone" style="margin-top:16px">
+          <summary style="cursor:pointer;color:#ff9a9a">⚠️ Zona berbahaya</summary>
+          <p class="hint" style="margin:8px 0;color:var(--fg3)">
+            <b>Hapus semua file</b> membuat satu commit berisi tree kosong di branch terpilih —
+            isi branch langsung lenyap. Riwayat tetap tersimpan; pemulihan = <i>revert</i> ke commit sebelumnya.
+          </p>
+          <button class="ghost" id="btnWipe" disabled style="border-color:#8a3030;color:#ff9a9a">🗑 Hapus semua file di branch ini</button>
+        </details>
       </div>
     </section>
 

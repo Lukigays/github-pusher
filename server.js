@@ -258,7 +258,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'github-zip-pusher',
-    version: '1.1.6',
+    version: '1.1.7',
     mode: SERVERLESS ? 'serverless' : 'server',
     vercel: IS_VERCEL,
     region: process.env.VERCEL_REGION || null,
@@ -644,6 +644,36 @@ app.delete('/api/files', requireAuth, noDiskOnServerless, asyncH(async (req, res
  *  - Body request dibatasi 4,5 MB                  -> ZIP/folder kecil saja.
  * Jadi: upload + ekstrak (di memori) + push dilakukan dalam SATU request.
  */
+/* ---- WIPE: hapus SEMUA file di sebuah branch (commit tree kosong) ---- */
+app.post('/api/wipe', requireAuth, rateLimit('wipe', 5, 60_000), asyncH(async (req, res) => {
+  const b = req.body || {};
+  const fullName = String(b.repo || '').trim();
+  const branch = String(b.branch || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return res.status(400).json({ error: 'Format repo harus "owner/nama-repo".' });
+  if (!branch || /[~^:?*\[\]@{}\\]/.test(branch) || branch.includes('..') || branch.endsWith('.lock')) {
+    return res.status(400).json({ error: 'Nama branch tidak valid.' });
+  }
+  const { gh } = getGitHub(req);
+  if (!gh || isDemoSession(req)) {
+    return res.status(400).json({
+      error: 'Menghapus file repo butuh token GitHub asli.',
+      hint: 'Hubungkan Personal Access Token atau login GitHub terlebih dahulu — sesi demo tidak menyentuh repo mana pun.',
+    });
+  }
+  const [owner, repo] = fullName.split('/');
+  const info0 = await gh.repoPermission(owner, repo);
+  if (info0.permission === 'pull') {
+    return res.status(403).json({ error: `Token Anda hanya punya akses baca ke ${fullName}.`, hint: 'Wipe butuh izin push.' });
+  }
+  const me = req.session.user || {};
+  const message = String(b.message || '').trim().slice(0, 500) || `Kosongkan branch ${branch} (hapus semua file)`;
+  const r = await gh.wipeBranch({
+    owner, repo, branch, message,
+    author: me.provider === 'github' ? { name: me.name || me.login, email: me.email, login: me.login } : undefined,
+  });
+  res.json({ ok: true, ...r });
+}));
+
 app.post('/api/push-upload', requireAuth, rateLimit('pushup', 20, 60_000), memUpload.any(), asyncH(async (req, res) => {
   const all = [...(req.files || [])];
   const zipFile = all.find((f) => f.fieldname === 'zip');

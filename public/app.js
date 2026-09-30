@@ -472,6 +472,39 @@ async function doOneShotPush(payload) {
   }
 }
 
+/** Hapus SEMUA file di branch tujuan (commit tree kosong). Konfirmasi ganda. */
+async function doWipe() {
+  const repo = $('#repoSelect').value;
+  const branch = currentBranch();
+  if (!repo || !branch) return alert('Pilih repository dan branch dulu.');
+  if (!confirm(`PERHATIAN — OPERASI DESTRUKTIF!\n\nSEMUA file di branch "${branch}" pada repo ${repo} akan DIHAPUS lewat satu commit kosong.\n\nRiwayat tetap ada: pemulihan = revert ke commit sebelumnya.\n\nLanjutkan?`)) return;
+  const ketik = prompt(`Ketik persis nama branch berikut untuk konfirmasi:\n\n${branch}`);
+  if (ketik === null) return;
+  if (ketik.trim() !== branch) return note('err', `Konfirmasi salah (Anda mengetik "${ketik.trim()}", seharusnya "${branch}"). Operasi dibatalkan.`);
+  const msg = prompt('Pesan commit penghapusan (boleh diubah):', `Kosongkan branch ${branch} (hapus semua file)`);
+  if (msg === null) return;
+  $('#btnWipe').disabled = true;
+  $('#resultCard').classList.remove('hidden');
+  $('#resultNote').innerHTML = ''; $('#resultLinks').innerHTML = '';
+  $('#resultTag').textContent = 'menghapus…';
+  try {
+    const r = await api('/api/wipe', { method: 'POST', body: { repo, branch, message: msg.trim() || `Kosongkan branch ${branch}` } });
+    $('#resultTag').textContent = 'wipe sukses ✓';
+    note('ok', `<b>Semua file di branch <code>${esc(branch)}</code> dihapus</b> (${r.removed ?? '?'} file) lewat commit kosong <code>${esc(r.shortSha)}</code>.<br/>Pulihkan kapan saja dengan revert ke commit sebelumnya.`, '#resultNote');
+    if (r.commitUrl) {
+      $('#resultLinks').innerHTML = `<a class="btnlink" style="padding:8px 12px" href="${esc(r.commitUrl)}" target="_blank" rel="noopener">🔗 Lihat commit penghapusan</a>`;
+    }
+    log(`🗑 Wipe ${esc(repo)}@${esc(branch)}: ${r.removed ?? '?'} file dihapus, commit ${esc(r.shortSha)}`, 'ok');
+  } catch (e) {
+    $('#resultTag').textContent = 'gagal';
+    note('err', `<b>Wipe gagal:</b> ${esc(e.message)}${e.hint ? '<br/>' + esc(e.hint) : ''}`, '#resultNote');
+    log('✖ ' + esc(e.message), 'err');
+  } finally {
+    $('#btnWipe').disabled = false;
+    updatePushReady();
+  }
+}
+
 /* ==================================================================
  * APP VIEW
  * ================================================================== */
@@ -746,6 +779,8 @@ function updatePushReady() {
   const ready = okFiles && okRepo && okBranch;
   $('#btnPush').disabled = !ready;
   $('#btnPreview').disabled = !okFiles;
+  const w = $('#btnWipe');
+  if (w && !w.dataset.busy) w.disabled = !(okRepo && okBranch);
   const h = $('#pushHint');
   if (h) {
     h.textContent = ready ? '' :
@@ -1004,6 +1039,9 @@ function bindApp() {
 
   $('#btnPush').onclick = doPush;
   $('#btnPreview').onclick = doPreview;
+  if ($('#btnWipe')) {
+    $('#btnWipe').onclick = async (...a) => { $('#btnWipe').dataset.busy = '1'; try { await doWipe(...a); } finally { delete $('#btnWipe').dataset.busy; } };
+  }
 
   // modal repo baru
   $('#btnNewRepo').onclick = () => $('#modal').classList.remove('hidden');

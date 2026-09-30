@@ -542,6 +542,46 @@ async function main() {
       check('pemetaan benar: 0x80=Ç 0x91=æ 0xA4=ñ', [...tbl][0] === 'Ç' && [...tbl][17] === 'æ' && [...tbl][36] === 'ñ');
     }
     check('scanZipLocal memakai decodeCp437(nameBytes)', appJs.includes('decodeCp437(nameBytes)'));
+
+    /* ---- 18. wipe: hapus semua file di branch ---- */
+    console.log('\n▶ [18] wipe branch');
+    const wp = await startDemoInstance(3119, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();
+    const wpBak = cookie; cookie = '';
+    try {
+      const wreq = (m, u, o) => req(m, u, { ...o, base: wp.url });
+      let d = await wreq('GET', '/auth/github');
+      check('login demo (instance 18)', d.status === 302);
+
+      d = await wreq('POST', '/api/wipe', { body: { repo: 'octo/demo-repo', branch: 'main' } });
+      check('wipe tanpa token -> 400', d.status === 400, 'status ' + d.status);
+
+      d = await wreq('POST', '/api/link-token', { body: { token: 'ghp_mocktokenforlocaltestingonly' } });
+      check('link-token (instance 18)', d.status === 200);
+
+      d = await wreq('POST', '/api/wipe', { body: { repo: 'octo/demo-repo', branch: 'tidak-ada' } });
+      check('wipe branch tidak ada -> 404', d.status === 404, 'status ' + d.status);
+
+      d = await wreq('GET', '/api/tree/octo/demo-repo');
+      const sebelum = (d.data?.entries || []).filter((e) => e.type !== 'dir').length;
+      check('repo mock punya file sebelum wipe', sebelum > 0, 'blob ' + sebelum);
+
+      d = await wreq('POST', '/api/wipe', { body: { repo: 'octo/demo-repo', branch: 'main', message: 'bersih-bersih' } });
+      check('wipe sukses', d.status === 200 && d.data?.ok === true, d.data?.error || '');
+      check('jumlah file terhapus dilaporkan', (d.data?.removed || 0) > 0, 'removed ' + d.data?.removed);
+
+      d = await wreq('GET', '/api/tree/octo/demo-repo');
+      check('tree branch kosong sesudah wipe', (d.data?.entries || []).length === 0, 'entries ' + (d.data?.entries || []).length);
+
+      const zipBuf7 = await fsp.readFile(zipPath);
+      const mp13 = multipart({ stripRoot: '1' }, [{ field: 'zip', filename: 'p.zip', contentType: 'application/zip', content: zipBuf7 }]);
+      d = await wreq('POST', '/api/files/zip', { body: mp13.body, headers: mp13.headers, raw: true });
+      check('upload ZIP setelah wipe', d.status === 200);
+      d = await wreq('POST', '/api/push', { body: { repo: 'octo/demo-repo', branch: 'main', message: 'isi ulang' } });
+      check('push setelah wipe tetap jalan', d.data?.ok === true && d.data?.dryRun === false, d.data?.error || '');
+    } finally {
+      wp.stop();
+      cookie = wpBak;
+    }
     /* ---- 14. sesi demo + hubungkan PAT => push SUNGGUHAN (bukan dry-run) ---- */
     console.log('\n▶ [14] demo -> PAT -> push sungguhan');
     const pat = await startDemoInstance(3117, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();

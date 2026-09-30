@@ -169,7 +169,20 @@ const server = http.createServer((req, res) => {
       return send(res, 200, { ref: `refs/heads/${name}`, object: { sha: body.sha, type: 'commit' }, forced: !!body.force });
     }
 
-    if (m === 'GET' && rest.startsWith('/contents')) return send(res, 200, []);
+    if (m === 'GET' && rest.startsWith('/contents')) {
+      /* daftar isi branch utama dari tree head (flat, cukup untuk kebutuhan uji) */
+      const rel = rest.replace(/^\/contents\/?/, '').split('/').filter(Boolean).map(decodeURIComponent).join('/');
+      const headSha = repo.branches[repo.default_branch];
+      const head = repo.commits[headSha];
+      const items = head ? (repo.trees[head.tree.sha] || {}) : {};
+      const list = Object.entries(items)
+        .filter(([p]) => (rel ? p.startsWith(rel + '/') : true))
+        .map(([p, v]) => ({
+          name: rel ? p.slice(rel.length + 1) : p.split('/').pop(),
+          path: p, type: 'blob', sha: v.sha, size: v.size,
+        }));
+      return send(res, 200, list);
+    }
 
     return send(res, 404, { message: 'Mock: ' + m + ' ' + p + ' belum ditiru' });
   });
