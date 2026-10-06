@@ -188,13 +188,18 @@ function showLogin() {
     }
   };
 
+  const cbPath = (state.config.githubCallbackPath || '/auth/github/callback');
+  const whereEnv = (state.config.vercel || state.config.serverless)
+    ? 'Vercel Dashboard → Settings → Environment Variables (Production + Preview), lalu <b>Redeploy</b>'
+    : 'file <code>.env</code>, lalu jalankan ulang <code>npm start</code>';
   $('#setupHelp').innerHTML = `
-    <b style="color:var(--fg)">Cara mengaktifkan login GitHub (sekali saja):</b><br/>
+    <b style="color:var(--fg)">Cara mengaktifkan login GitHub (sekali saja) — muncul layar "Authorize" seperti di GitHub:</b><br/>
     1. Buka <a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a> → <i>OAuth Apps</i> → <i>New OAuth App</i>.<br/>
     2. <b>Homepage URL</b>: <code>${esc(location.origin)}</code><br/>
-    3. <b>Authorization callback URL</b>: <code>${esc(location.origin)}/auth/github/callback</code><br/>
-    4. Salin <i>Client ID</i> &amp; <i>Client Secret</i> ke file <code>.env</code>, lalu jalankan ulang <code>npm start</code>.<br/>
-    <span style="color:var(--fg3)">Tanpa langkah ini aplikasi tetap jalan dalam mode demo (push = dry-run).</span>`;
+    3. <b>Authorization callback URL</b>: <code>${esc(location.origin)}${esc(cbPath)}</code>
+       — atau cukup <code>${esc(location.origin)}/</code> bila OAuth App Anda sudah terdaftar dengan callback root (keduanya diterima server).<br/>
+    4. Salin <i>Client ID</i> &amp; <i>Client Secret</i> ke ${whereEnv}.<br/>
+    <span style="color:var(--fg3)">Tanpa langkah ini aplikasi tetap jalan dalam mode demo (push = dry-run) atau lewat Personal Access Token.</span>`;
 }
 
 async function onGoogleCredential(resp) {

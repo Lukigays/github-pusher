@@ -637,6 +637,18 @@ async function main() {
     /* sanitas frontend chunked */
     check('app.js punya pipeline chunked (/api/push-chunk & push-commit)', appJs.includes("'/api/push-chunk'") && appJs.includes("'/api/push-commit'"));
     check('app.js ekstraksi ZIP di browser (deflate-raw)', appJs.includes("DecompressionStream('deflate-raw')"));
+
+    /* ---- 20. login "Authorize" (OAuth): callback root + scope ---- */
+    console.log('\n▶ [20] OAuth authorize-ready');
+    const srvJs = await fsp.readFile(path.join(ROOT, 'server.js'), 'utf8');
+    check('callback OAuth juga diterima di ROOT ("/?code&state")',
+      /app\.get\('\/', \(req, res, next\) => \{\s*if \(req\.query\.code && req\.query\.state\)/.test(srvJs));
+    check('path callback bisa dikonfigurasi (GITHUB_CALLBACK_PATH)', srvJs.includes('GITHUB_CALLBACK_PATH'));
+    check('scope default = repo + email read-only (seperti layar Authorize)', /GH_SCOPE = process\.env\.GITHUB_SCOPE \|\| 'repo user:email'/.test(srvJs));
+    check('handler callback dipakai dua rute', (srvJs.match(/oauthCallbackHandler/g) || []).length >= 3);
+    check('UI login menampilkan URL callback yang harus didaftarkan', appJs.includes('Authorization callback URL'));
+    const d20 = await req('GET', '/api/config');
+    check('/api/config memuat githubCallbackPath', d20.data?.githubCallbackPath === '/auth/github/callback', String(d20.data?.githubCallbackPath));
     /* ---- 14. sesi demo + hubungkan PAT => push SUNGGUHAN (bukan dry-run) ---- */
     console.log('\n▶ [14] demo -> PAT -> push sungguhan');
     const pat = await startDemoInstance(3117, { GITHUB_API_URL: `http://127.0.0.1:${MOCK_PORT}` }).ready();

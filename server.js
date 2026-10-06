@@ -38,7 +38,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TMP_DIR = path.resolve(process.env.TMP_DIR || './data/tmp');
 const GH_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
 const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
-const GH_SCOPE = process.env.GITHUB_SCOPE || 'repo';
+const GH_SCOPE = process.env.GITHUB_SCOPE || 'repo user:email';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const DEMO_MODE = !GH_CLIENT_ID || !GH_CLIENT_SECRET; // tanpa kredensial -> mode demo
 
@@ -106,6 +106,13 @@ if (SECRET_MISSING) {
 if (!INDEX_EXISTS) {
   APP_WARNINGS.push('Berkas <code>public/index.html</code> tidak ada di dalam bundle fungsi. Pastikan folder <code>public/</code> ter-commit ke git dan tidak masuk <code>.gitignore</code>, lalu redeploy.');
 }
+/* OAuth App yang terdaftar dengan callback ROOT (mis. https://x.vercel.app tanpa
+   path) akan kembali ke "/?code=...&state=..." — tangkap di sini (v1.1.9). */
+app.get('/', (req, res, next) => {
+  if (req.query.code && req.query.state) return asyncH(oauthCallbackHandler)(req, res, next);
+  return next();
+});
+
 app.use(express.static(PUBLIC_DIR, { maxAge: '5m' }));
 
 /* Fallback bila bundle kehilangan folder public: tampilkan halaman diagnostik
@@ -128,7 +135,10 @@ ${APP_WARNINGS.map((w) => `<div class="w">${w}</div>`).join('')}
 /* Helper                                                              */
 /* ------------------------------------------------------------------ */
 const publicUrl = (req) => (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
-const callbackUrl = (req) => `${publicUrl(req)}/auth/github/callback`;
+/* Path callback OAuth. Default /auth/github/callback; set GITHUB_CALLBACK_PATH=/
+   bila OAuth App Anda terdaftar dengan callback root (mis. https://x.vercel.app). */
+const GH_CALLBACK_PATH = '/' + String(process.env.GITHUB_CALLBACK_PATH || '/auth/github/callback').replace(/^\/+|\/+$/g, '');
+const callbackUrl = (req) => `${publicUrl(req)}${GH_CALLBACK_PATH}`;
 
 function uid() { return crypto.randomBytes(12).toString('hex'); }
 function uploadDir(id) { return path.join(TMP_DIR, id); }
@@ -264,7 +274,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'github-zip-pusher',
-    version: '1.1.8',
+    version: '1.1.9',
     mode: SERVERLESS ? 'serverless' : 'server',
     vercel: IS_VERCEL,
     region: process.env.VERCEL_REGION || null,
@@ -296,6 +306,7 @@ app.get('/api/config', (req, res) => {
     warnings: APP_WARNINGS,
     maxApiFileMB: MAX_API_FILE_BYTES / 1048576,
     githubScope: GH_SCOPE,
+    githubCallbackPath: GH_CALLBACK_PATH,
     githubApiUrl: API,
   });
 });
@@ -356,7 +367,8 @@ app.get('/auth/github', rateLimit('gh', 20, 60_000), (req, res) => {
   res.redirect(url.toString());
 });
 
-app.get('/auth/github/callback', asyncH(async (req, res) => {
+/* Handler penukaran kode OAuth — dipakai /auth/github/callback DAN root "/" */
+async function oauthCallbackHandler(req, res) {
   if (DEMO_MODE) return res.redirect('/');
   const { code, state, error, error_description } = req.query;
   if (error) return res.redirect(`/?notice=oauth-error&msg=${encodeURIComponent(error_description || error)}`);
@@ -389,7 +401,8 @@ app.get('/auth/github/callback', asyncH(async (req, res) => {
   };
   saveSession(req);
   res.redirect('/?notice=logged-in');
-}));
+}
+app.get('/auth/github/callback', asyncH(oauthCallbackHandler));
 
 /* ------------------------------------------------------------------ */
 /* ROUTE: login Google (ID token diverifikasi di server)               */
