@@ -542,6 +542,9 @@ async function main() {
       check('pemetaan benar: 0x80=Ç 0x91=æ 0xA4=ñ', [...tbl][0] === 'Ç' && [...tbl][17] === 'æ' && [...tbl][36] === 'ñ');
     }
     check('scanZipLocal memakai decodeCp437(nameBytes)', appJs.includes('decodeCp437(nameBytes)'));
+    const ghJs = await fsp.readFile(path.join(ROOT, 'lib/github.js'), 'utf8');
+    check('wipe TIDAK POST tree kosong (GitHub asli menolak: 422 Invalid tree info)',
+      !/git\/trees`, \{ tree: \[\] \}/.test(ghJs) && ghJs.includes('4b825dc642cb6eb9a060e54bf8d69288fbee4904'));
 
     /* ---- 18. wipe: hapus semua file di branch ---- */
     console.log('\n▶ [18] wipe branch');

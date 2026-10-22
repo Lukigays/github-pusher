@@ -18,6 +18,8 @@ const sha = () => crypto.randomBytes(20).toString('hex');
 /* ---------- state awal ---------- */
 function newRepo(defaultBranch = 'main', initialFiles = { 'README.md': Buffer.from('# Demo\n') }) {
   const repo = { default_branch: defaultBranch, private: false, blobs: {}, trees: {}, commits: {}, branches: {} };
+  /* tree kosong bawaan Git harus dikenal mock, sama seperti GitHub asli */
+  repo.trees['4b825dc642cb6eb9a060e54bf8d69288fbee4904'] = {};
   const treeSha = sha();
   repo.trees[treeSha] = {};
   for (const [p, buf] of Object.entries(initialFiles)) {
@@ -131,6 +133,9 @@ const server = http.createServer((req, res) => {
       for (const t of body.tree || []) {
         if (!repo.blobs[t.sha] && !body.base_tree) return send(res, 422, { message: 'Git Repository is empty.' });
         items[t.path] = { sha: t.sha, mode: t.mode, size: (repo.blobs[t.sha] || Buffer.alloc(0)).length };
+      }
+      if (!body.base_tree && (!body.tree || body.tree.length === 0)) {
+        return send(res, 422, { message: 'Invalid tree info' }); // tiru perilaku GitHub asli
       }
       const tSha = sha();
       repo.trees[tSha] = items;
